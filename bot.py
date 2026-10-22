@@ -13,6 +13,7 @@ import time
 
 import db
 from aiogram import Bot, Dispatcher, F
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
@@ -894,10 +895,14 @@ async def cb_custom_topup(c: CallbackQuery):
 
 @DP.message(F.chat.type == "private", F.text)
 async def custom_topup_amount(m: Message):
-    """Свободная сумма звёзд: только в контексте ввода после «Своя сумма»."""
+    """Свободная сумма звёзд: только в контексте ввода после «Своя сумма».
+    ВАЖНО (фикс v11.45): без активного состояния обязаны кидать
+    SkipHandler — иначе aiogram глотает ВСЕ личные тексты (этот хендлер
+    зарегистрирован раньше основного парсера: «баланс», «Футбол 100»,
+    /start в личке молчали, юзер видел «кнопки не реагируют»)."""
     ts = CUSTOM_TOPUP.get(m.from_user.id)
     if not ts or time.time() - ts > 600:
-        return                          # не наш контекст — пропускаем дальше
+        raise SkipHandler                # не наш контекст — пусть ответит основной парсер
     t = (m.text or "").strip().replace(" ", "")
     if not t.isdigit():
         await m.answer(f"{pe('sad')} Числом, от 1 до 10 000 {pe('stars')}")
@@ -1290,7 +1295,7 @@ def self_renew_loop():
     работать, даунтайм = только подъём сменщика (~2-3 мин).
     Watchdog по cron — лишь страховка (GitHub cron сработал 1 раз за
     час при расписании */5, замер 22.10)."""
-    RENEW_AFTER = 330 * 60 - 18 * 60   # ~5ч12м
+    RENEW_AFTER = 330 * 60 - 55 * 60   # ~4ч35м: запас на очереди GitHub до 45 мин
     time.sleep(RENEW_AFTER)
     try:
         # финальный синк, чтобы не потерять последние секунды базы
@@ -1305,7 +1310,7 @@ def self_renew_loop():
              "Accept": "application/vnd.github+json"}, method="POST")
         resp = urllib.request.urlopen(req)
         logging.info("dispatch сменщика прошёл (%s), ждём его старта...", resp.status)
-        deadline = time.time() + 15 * 60     # страховка: дальше — просто выходим
+        deadline = time.time() + 45 * 60     # страховка: дальше — просто выходим
         while time.time() < deadline:
             try:
                 st = successor_status(GH_RUN_ID)
@@ -1315,7 +1320,7 @@ def self_renew_loop():
                 logging.info("сменщик поднялся — передаём эстафету (код %s)", RENEW_EXIT)
                 os._exit(RENEW_EXIT)
             time.sleep(20)
-        logging.warning("сменщик не поднялся за 15 мин — выходим (подхватит watchdog)")
+        logging.warning("сменщик не поднялся за 45 мин — выходим (подхватит watchdog)")
         os._exit(RENEW_EXIT)
     except Exception as e:
         logging.warning("само-продление не удалось: %s — работаем до таймаута", e)

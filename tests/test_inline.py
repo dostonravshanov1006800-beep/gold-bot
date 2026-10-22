@@ -139,3 +139,23 @@ def test_successor_status_picks_newest_after_ours():
     my = 100
     newer = [r for r in runs["workflow_runs"] if r["id"] != my and r["id"] > my]
     assert max(newer, key=lambda r: r["id"])["status"] == "in_progress"
+
+
+def test_custom_topup_skips_without_state():
+    """v11.45: без состояния ввода хендлер обязан кидать SkipHandler,
+    иначе глотаются все личные тексты (кнопки/команды «не отвечают»)."""
+    import asyncio
+    from aiogram.dispatcher.event.bases import SkipHandler
+
+    class U:
+        id = 999999999
+    class M:
+        from_user = U()
+        text = "баланс"
+
+    bot.CUSTOM_TOPUP.pop(999999999, None)
+    try:
+        asyncio.run(bot.custom_topup_amount(M()))
+        raise AssertionError("должен был кидать SkipHandler")
+    except SkipHandler:
+        pass
