@@ -519,6 +519,15 @@ def group_top(chat_id, limit=10):
              "WHERE s.chat_id=? ORDER BY s.total_won DESC, s.won DESC LIMIT ?",
              (chat_id, limit))
 
+def del_meta(key):
+    ex("DELETE FROM meta WHERE key=?", (key,))
+
+
+def get_meta(key):
+    r = one("SELECT value FROM meta WHERE key=?", (key,))
+    return r["value"] if r else None
+
+
 def put_meta(key, value):
     """Служебные метки (сердцебиение, состояние) — на вид снаружи, через коммиты bot.db."""
     ex("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))

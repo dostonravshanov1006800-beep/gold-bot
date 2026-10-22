@@ -40,6 +40,40 @@ def draw_bank(bank, users):
 AWAIT = {}
 
 
+def _await_set(uid, st):
+    """Ожидание ввода админа пишется и в базу: смена рана GitHub Actions
+    каждые ~5 ч убивала in-memory состояние — «Новое задание» и прочие
+    вводы молча отваливались посреди заполнения (22.10, 20:49)."""
+    AWAIT[uid] = st
+    db.put_meta(f"await:{uid}", json.dumps(st))
+
+
+def _await_pop(uid):
+    st = AWAIT.pop(uid, None)
+    raw = db.get_meta(f"await:{uid}")
+    db.del_meta(f"await:{uid}")
+    if st is None and raw:
+        try:
+            st = json.loads(raw)
+        except Exception:
+            st = None
+    return st
+
+
+def _await_get(uid):
+    st = AWAIT.get(uid)
+    if st:
+        return st
+    raw = db.get_meta(f"await:{uid}")
+    if raw:
+        try:
+            st = json.loads(raw)
+            AWAIT[uid] = st
+        except Exception:
+            st = None
+    return st
+
+
 def setup(ctx):
     """ctx: bot, dp, pe, btn, kb, fg, is_admin, broadcast_all."""
     DP, BOT = ctx["dp"], ctx["bot"]
@@ -271,6 +305,7 @@ def setup(ctx):
         if not is_admin(m.from_user.id):
             await m.answer(f"{pe('warn')} Только для админа.")
             return
+        db.del_meta(f"await:{m.from_user.id}")
         AWAIT.pop(m.from_user.id, None)
         text, markup = screen_home()
         # снос старой reply-клавиатуры «Панель» (мини-апп удалён)
@@ -291,7 +326,7 @@ def setup(ctx):
         ref = (c.message.chat.id, c.message.message_id)
 
         if act is None:
-            AWAIT.pop(uid, None)
+            _await_pop(uid)
             await show(c, sec)
             await c.answer()
             return
@@ -325,7 +360,7 @@ def setup(ctx):
             )
             await c.answer()
         elif sec == "tasks" and act == "add":
-            AWAIT[uid] = {"kind": "addtask", "msg": ref}
+            _await_set(uid, {"kind": "addtask", "msg": ref})
             await c.message.edit_text(
                 f"{pe('plus')} <b>Новое задание</b>\n\n"
                 "Пришли одним сообщением: <code>@канал награда</code>\n"
@@ -334,7 +369,7 @@ def setup(ctx):
             )
             await c.answer()
         elif sec == "shop" and act == "add":
-            AWAIT[uid] = {"kind": "additem", "msg": ref}
+            _await_set(uid, {"kind": "additem", "msg": ref})
             await c.message.edit_text(
                 f"{pe('plus')} <b>Новый товар</b>\n\n"
                 "Пришли одним сообщением: <code>цена название</code>\n"
@@ -371,7 +406,7 @@ def setup(ctx):
             await c.message.edit_text(text, reply_markup=markup)
             await c.answer()
         elif sec == "users" and act == "take":
-            AWAIT[uid] = {"kind": "take", "target": int(arg), "msg": ref}
+            _await_set(uid, {"kind": "take", "target": int(arg), "msg": ref})
             u = db.get_user(int(arg))
             name = f"@{u['username']}" if u and u["username"] else f"ID {arg}"
             await c.message.edit_text(
@@ -381,7 +416,7 @@ def setup(ctx):
             )
             await c.answer()
         elif sec == "users" and act == "give":
-            AWAIT[uid] = {"kind": "give", "target": int(arg), "msg": ref}
+            _await_set(uid, {"kind": "give", "target": int(arg), "msg": ref})
             u = db.get_user(int(arg))
             name = f"@{u['username']}" if u and u["username"] else f"ID {arg}"
             await c.message.edit_text(
@@ -407,7 +442,7 @@ def setup(ctx):
             await show(c, "reqs", f"{pe('check')} Выдано" if act == "done" else f"{pe('check')} Отклонено")
             await c.answer("Готово")
         elif sec == "bank" and act == "new":
-            AWAIT[uid] = {"kind": "bank", "msg": ref}
+            _await_set(uid, {"kind": "bank", "msg": ref})
             await c.message.edit_text(
                 f"{pe('coin')} <b>Банк розыгрыша</b>\n\n"
                 "Пришли сумму одним сообщением (например <code>1000</code>). "
@@ -417,14 +452,14 @@ def setup(ctx):
             )
             await c.answer()
         elif sec == "bc" and act == "new":
-            AWAIT[uid] = {"kind": "bc", "msg": ref}
+            _await_set(uid, {"kind": "bc", "msg": ref})
             await c.message.edit_text(
                 f"{pe('info')} <b>Текст рассылки</b>\n\nПришли сообщение, которое уйдёт всем.",
                 reply_markup=kb([btn("Отмена", "a:bc", "back")]),
             )
             await c.answer()
         elif sec == "bc" and act == "go":
-            st = AWAIT.pop(uid, None)
+            st = _await_pop(uid)
             if not st or st.get("kind") != "bc_ready":
                 await c.answer("Нечего отправлять", show_alert=True)
                 return
@@ -451,14 +486,14 @@ def setup(ctx):
     @DP.message(F.text & ~F.text.startswith("/"))
     async def crm_text(m: Message):
         uid = m.from_user.id
-        st = AWAIT.get(uid)
+        st = _await_get(uid)
         if not st or not is_admin(uid):
             raise SkipHandler  # чужие/обычные сообщения идут дальше по хендлерам
         kind = st["kind"]
         chat_id, mid = st["msg"]
 
         async def done(key, note):
-            AWAIT.pop(uid, None)
+            _await_pop(uid)
             try:
                 await m.delete()
             except TelegramAPIError:
@@ -551,7 +586,7 @@ def setup(ctx):
             ))
             await done("bank", f"{pe('check')} Банк {fg(bank)} {pe('coin')} раздан {len(winners)} юзерам, уведомления отправлены")
         elif kind == "bc":
-            AWAIT[uid] = {"kind": "bc_ready", "text": m.html_text, "msg": st["msg"]}
+            _await_set(uid, {"kind": "bc_ready", "text": m.html_text, "msg": st["msg"]})
             try:
                 await m.delete()
             except TelegramAPIError:
