@@ -308,6 +308,9 @@ async def cmd_start(m: Message, command: CommandStart):
     else:
         await m.answer(text, reply_markup=menu_kb(u["gold"]))   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
         # Игры/Магазин/Бонус/Пополнить/Топ); карточка заданий — только по кнопке.
+    # v11.48: полное меню кнопок — выше, а справочник всех функций идёт
+    # вторым сообщением (подпись к фото ограничена 1024 символами)
+    await m.answer(reference_pack())
         # В группах меню не нужно: там всё работает текстом («футбол 100»).
 
 
@@ -1218,12 +1221,11 @@ async def cmd_referrals(m: Message):
         ))
 
 
-@DP.message(Command("help"), F.chat.type == "private")
-async def cmd_help(m: Message):
-    db.upsert_user(m.from_user.id, m.from_user.username)
-    adm = is_admin(m.from_user.id)
+def reference_pack():
+    """Справочник всех функций бота — 10 сворачиваемых цитат (v11.47).
+    Используется в /help и вторым сообщением в /start."""
     bq = lambda t, h: f"<blockquote expandable><b>{h}</b>\n{t}</blockquote>"
-    await _open_screen(m,
+    return (
         f"{pe('info')} <b>Funs · Справочник всех функций</b>\n\n"
         + bq("Валюта бота — Голда. Баланс и профиль: /balance · кнопки меню — под каждым сообщением. "
            "Профиль показывает баланс, игры, выигрыши и рефералов.",
@@ -1243,8 +1245,8 @@ async def cmd_help(m: Message):
            "«держи 5000», «тебе 1 500 000», «5к», «2кк», «+250000». "
            "Получателю — уведомление в личку.",
            f"{pe('right')} Переводы друзьям")
-        + "\n" + bq(f"Твоя ссылка: /referrals. Друг запустил бота и выполнил первое задание — "
-           f"тебе +25 Голды за каждого.",
+        + "\n" + bq("Твоя ссылка: /referrals. Друг запустил бота и выполнил первое задание — "
+           "тебе +25 Голды за каждого.",
            f"{pe('people')} Рефералы")
         + "\n" + bq("Подписка на каналы = Голда. Раздел «Задания» в меню — подписался, "
            "нажал «Проверить» — получил награду.",
@@ -1259,8 +1261,17 @@ async def cmd_help(m: Message):
         + "\n" + bq("В любом чате набери @funapp_game — всплывёт карточка "
            "с твоей реферальной ссылкой для приглашения.",
            f"{pe('app')} Инлайн-приглашение")
-        + (f"\n\n{pe('robot')} Админ: /admin" if adm else ""),
-        back_kb())
+    )
+
+
+@DP.message(Command("help"), F.chat.type == "private")
+async def cmd_help(m: Message):
+    db.upsert_user(m.from_user.id, m.from_user.username)
+    adm = is_admin(m.from_user.id)
+    text = reference_pack()
+    if adm:
+        text += f"\n\n{pe('robot')} Админ: /admin"
+    await _open_screen(m, text, back_kb())
 
 # ---------- CRM-админка внутри бота ----------
 import crm
