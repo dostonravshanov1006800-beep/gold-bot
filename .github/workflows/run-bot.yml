@@ -1,16 +1,16 @@
 name: Run bot
 
 on:
-  workflow_dispatch:   # запуск: деплой кода или сторож (watchdog.yml)
+  workflow_dispatch:      # деплой, сторож или само-продление
+  repository_dispatch:    # внешний сторож (Cloudflare Worker и т.п.)
 
 concurrency:
   group: bot
-  # новый ран автоматически гасит предыдущий: инстанс всегда один,
-  # код всегда с последнего main (инцидент 22.10 с откатом кода закрыт)
-  cancel-in-progress: true
+  cancel-in-progress: true   # инцидент 22.10 с откатом кода закрыт этим
 
 permissions:
   contents: write
+  actions: write          # само-продление вызывает workflow_dispatch
 
 jobs:
   run:
@@ -26,17 +26,23 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
-          PREMIUM_UI: ${{ secrets.PREMIUM_UI }}
+          DB_KEY: ${{ secrets.DB_KEY }}
+          GH_RENEW_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           while true; do
             python bot.py
-            echo "бот остановился, перезапуск через 10с"
+            code=$?
+            if [ "$code" = "42" ]; then
+              echo "эстафета передана — завершаем джобу спокойно"
+              exit 0
+            fi
+            echo "бот остановился ($code), перезапуск через 10с"
             sleep 10
           done
