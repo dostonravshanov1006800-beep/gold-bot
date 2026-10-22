@@ -1,0 +1,42 @@
+name: Run bot
+
+on:
+  workflow_dispatch:   # запуск: деплой кода или сторож (watchdog.yml)
+
+concurrency:
+  group: bot
+  # новый ран автоматически гасит предыдущий: инстанс всегда один,
+  # код всегда с последнего main (инцидент 22.10 с откатом кода закрыт)
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          PREMIUM_UI: ${{ secrets.PREMIUM_UI }}
+        run: |
+          while true; do
+            python bot.py
+            echo "бот остановился, перезапуск через 10с"
+            sleep 10
+          done

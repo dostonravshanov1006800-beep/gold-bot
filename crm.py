@@ -1,0 +1,478 @@
+"""CRM-админка внутри бота: один редактируемый экран, мгновенные действия.
+
+Callback-схема: a:<раздел>[:<действие>[:<id>]]. Ввод текста (канал, цена, сумма,
+рассылка) ловится через in-memory состояние админа AWAIT[uid].
+"""
+import asyncio
+import json
+import logging
+import random
+
+from aiogram import F
+from aiogram.dispatcher.event.bases import SkipHandler
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+
+import db
+
+# ---------- распределение банка ----------
+def draw_bank(bank, users):
+    """Банк случайно делится по топу: топ-3 вес 5, места 4-10 вес 3, 11-20 вес 2,
+    внутри тира разброс рандомный. Возвращает [(uid, сумма)] ранжированно."""
+    users = users[:20]  # розыгрыш только по топ-20
+    n = len(users)
+    if n == 0 or bank <= 0:
+        return []
+    ws = [(5 if i < 3 else 3 if i < 10 else 2) * random.uniform(0.8, 1.25)
+          for i in range(n)]
+    tot = sum(ws)
+    exact = [bank * w / tot for w in ws]
+    shares = [int(e) for e in exact]
+    rem = bank - sum(shares)
+    order = sorted(range(n), key=lambda i: exact[i] - shares[i], reverse=True)
+    for k in range(rem):
+        shares[order[k % n]] += 1
+    return [(users[i]["id"], shares[i]) for i in range(n)]
+
+
+# uid -> {"kind": str, "msg": (chat_id, message_id), ...}
+AWAIT = {}
+
+
+def setup(ctx):
+    """ctx: bot, dp, pe, btn, kb, fg, is_admin, broadcast_all."""
+    DP, BOT = ctx["dp"], ctx["bot"]
+    pe, btn, kb, fg = ctx["pe"], ctx["btn"], ctx["kb"], ctx["fg"]
+    is_admin, broadcast_all = ctx["is_admin"], ctx["broadcast_all"]
+
+    # ---------- экраны ----------
+    def nav(active):
+        def b(label, key, icon):
+            return btn(("● " if active == key else "") + label, f"a:{key}", icon)
+        return [
+            [b("Обзор", "home", "stats"), b("Задания", "tasks", "tasks")],
+            [b("Магазин", "shop", "gift"), b("Заявки", "reqs", "tags")],
+            [b("Юзеры", "users", "people"), b("Рассылка", "bc", "info")],
+            [b("Банк", "bank", "coin")],
+        ]
+
+    def screen_home():
+        users, gold, pend = db.stats()
+        text = (
+            f"{pe('crown')} <b>CRM · Обзор</b>\n\n"
+            f"{pe('people')} Юзеров: <b>{fg(users)}</b>\n"
+            f"{pe('coin')} Голды в обороте: <b>{fg(gold)}</b>\n"
+            f"{pe('tags')} Заявок в ожидании: <b>{fg(pend)}</b>\n"
+            f"{pe('tasks')} Заданий: <b>{len(db.tasks())}</b>\n"
+            f"{pe('gift')} Товаров: <b>{len(db.items())}</b>"
+        )
+        return text, kb(*nav("home"))
+
+    def screen_tasks():
+        rows, lines = [], []
+        for t in db.tasks():
+            lines.append(f"<b>#{t['id']}</b> {t['channel']} · +{fg(t['reward'])} {pe('coin')}")
+            rows.append([btn(f"Удалить #{t['id']} {t['channel']}", f"a:tasks:del:{t['id']}", "trash")])
+        body = "\n".join(lines) or "Заданий пока нет."
+        text = f"{pe('tasks')} <b>CRM · Задания</b>\n\n{body}"
+        rows.append([btn("Добавить задание", "a:tasks:add", "plus")])
+        return text, kb(*rows, *nav("tasks"))
+
+    def screen_shop():
+        rows, lines = [], []
+        for i in db.items():
+            lines.append(f"<b>#{i['id']}</b> {i['title']} · {fg(i['cost'])} {pe('coin')}")
+            rows.append([btn(f"Удалить #{i['id']} {i['title'][:24]}", f"a:shop:del:{i['id']}", "trash")])
+        body = "\n".join(lines) or "Товаров пока нет."
+        text = f"{pe('gift')} <b>CRM · Магазин</b>\n\n{body}"
+        rows.append([btn("Добавить товар", "a:shop:add", "plus")])
+        return text, kb(*rows, *nav("shop"))
+
+    def screen_reqs():
+        rows, lines = [], []
+        reqs = db.pending_requests()
+        for r in reqs[:8]:
+            who = f"@{db.get_user(r['user_id'])['username']}" if db.get_user(r['user_id']) and db.get_user(r['user_id'])['username'] else f"ID {r['user_id']}"
+            lines.append(f"<b>#{r['id']}</b> {who} → {r['title']}")
+            rows.append([
+                btn(f"Выдать #{r['id']}", f"a:reqs:done:{r['id']}", "check"),
+                btn("Отклонить", f"a:reqs:no:{r['id']}", "trash"),
+            ])
+        body = "\n".join(lines) or "Новых заявок нет."
+        if len(reqs) > 8:
+            body += f"\n…и ещё {len(reqs) - 8}"
+        text = f"{pe('tags')} <b>CRM · Заявки на призы</b>\n\n{body}"
+        return text, kb(*rows, *nav("reqs"))
+
+    def screen_users(page=0):
+        per = 8
+        allu = db.q("SELECT id, username, gold FROM users ORDER BY joined DESC")
+        chunk = allu[page * per:(page + 1) * per]
+        rows = []
+        for u in chunk:
+            name = f"@{u['username']}" if u["username"] else f"ID {u['id']}"
+            # одна полная кнопка на юзера: имя и баланс не обрезаются,
+            # начисление/списание — внутри экрана юзера
+            rows.append([btn(f"{name} · {fg(u['gold'])}",
+                             f"a:users:v:{u['id']}", "people")])
+        pager = []
+        if page > 0:
+            pager.append(btn("Назад", f"a:users:p:{page - 1}", "back"))
+        if (page + 1) * per < len(allu):
+            pager.append(btn("Дальше", f"a:users:p:{page + 1}", "right"))
+        if pager:
+            rows.append(pager)
+        body = "Нажми на юзера — внутри начисление и списание." if allu else "Пока никого."
+        text = f"{pe('people')} <b>CRM · Юзеры</b> ({len(allu)})\n\n{body}"
+        return text, kb(*rows, *nav("users"))
+
+    def screen_user(target):
+        u = db.get_user(int(target))
+        if not u:
+            return screen_users(0)
+        name = f"@{u['username']}" if u["username"] else f"ID {u['id']}"
+        text = (
+            f"{pe('people')} <b>{name}</b>\n\n"
+            f"{pe('coin')} Баланс: <b>{fg(u['gold'])}</b>\n"
+            f"{pe('info')} ID: <code>{u['id']}</code>"
+        )
+        return text, kb(
+            [btn("Начислить", f"a:users:give:{u['id']}", "plus")],
+            [btn("Отнять", f"a:users:take:{u['id']}", "cross")],
+            [btn("Юзеры", "a:users", "back")],
+        )
+
+    def screen_bc():
+        text = (
+            f"{pe('info')} <b>CRM · Рассылка</b>\n\n"
+            "Нажми кнопку и пришли текст следующим сообщением. "
+            "Поддерживается HTML и премиум-эмодзи."
+        )
+        return text, kb([btn("Написать рассылку", "a:bc:new", "edit")], *nav("bc"))
+
+    def screen_bank():
+        g = db.last_giveaway()
+        if g:
+            winners = json.loads(g["winners"])
+            lines = []
+            for w in winners[:5]:
+                name = f"@{w['username']}" if w.get("username") else f"ID {w['id']}"
+                lines.append(f"{w['rank']}. {name} · +{fg(w['amount'])} {pe('coin')}")
+            tail = f"\n…и ещё {len(winners) - 5}" if len(winners) > 5 else ""
+            body = (
+                f"Последний розыгрыш: банк {fg(g['amount'])} {pe('coin')} на {g['players']} чел\n"
+                + "\n".join(lines) + tail
+            )
+        else:
+            body = "Розыгрышей ещё не было."
+        text = (
+            f"{pe('coin')} <b>CRM · Банк</b>\n\n{body}\n\n"
+            "Банк случайно делится по топ-20 по голде: топ-3 — крупные доли, "
+            "места 4–10 — средние, 11–20 — меньшие. Все получают уведомления."
+        )
+        return text, kb([btn("Провести розыгрыш", "a:bank:new", "party")], *nav("bank"))
+
+    SCREENS = {
+        "home": screen_home, "tasks": screen_tasks, "shop": screen_shop,
+        "reqs": screen_reqs, "users": screen_users, "bc": screen_bc,
+        "bank": screen_bank,
+    }
+
+    async def show(c: CallbackQuery, key, note=None):
+        text, markup = SCREENS[key]()
+        if note:
+            text = f"{note}\n\n{text}"
+        try:
+            await c.message.edit_text(text, reply_markup=markup)
+        except TelegramBadRequest as e:
+            if "not modified" not in str(e):
+                logging.warning("crm edit: %s", e)
+
+    async def redraw(chat_id, message_id, key, note=None):
+        text, markup = SCREENS[key]()
+        if note:
+            text = f"{note}\n\n{text}"
+        try:
+            await BOT.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=markup)
+        except TelegramBadRequest as e:
+            if "not modified" not in str(e):
+                logging.warning("crm redraw: %s", e)
+
+    # ---------- вход ----------
+    @DP.message(Command("admin"))
+    async def cmd_admin(m: Message):
+        if not is_admin(m.from_user.id):
+            await m.answer(f"{pe('warn')} Только для админа.")
+            return
+        AWAIT.pop(m.from_user.id, None)
+        text, markup = screen_home()
+        # снос старой reply-клавиатуры «Панель» (мини-апп удалён)
+        await m.answer(f"{pe('check')} Клавиатура мини-аппа убрана", reply_markup=ReplyKeyboardRemove())
+        await m.answer(text, reply_markup=markup)
+
+    # ---------- навигация и действия ----------
+    @DP.callback_query(F.data.startswith("a:"))
+    async def cb_crm(c: CallbackQuery):
+        if not is_admin(c.from_user.id):
+            await c.answer("Только для админа", show_alert=True)
+            return
+        parts = c.data.split(":")
+        sec = parts[1]
+        act = parts[2] if len(parts) > 2 else None
+        arg = parts[3] if len(parts) > 3 else None
+        uid = c.from_user.id
+        ref = (c.message.chat.id, c.message.message_id)
+
+        if act is None:
+            AWAIT.pop(uid, None)
+            await show(c, sec)
+            await c.answer()
+            return
+
+        if sec == "tasks" and act == "del":
+            db.del_task(int(arg))
+            await show(c, "tasks", f"{pe('check')} Задание удалено")
+            await c.answer("Удалено")
+        elif sec == "shop" and act == "del":
+            db.del_item(int(arg))
+            await show(c, "shop", f"{pe('check')} Товар удалён")
+            await c.answer("Удалено")
+        elif sec == "tasks" and act == "check":
+            lines = []
+            me = await BOT.me()
+            for t in db.tasks():
+                try:
+                    mem = await BOT.get_chat_member(t["channel"], me.id)
+                    ok = mem.status in ("administrator", "creator")
+                    lines.append(f"{pe('check') if ok else pe('warn')} {t['channel']} — бот {'админ' if ok else 'участник, не админ'}")
+                except TelegramAPIError as e:
+                    lines.append(f"{pe('cross')} {t['channel']} — бот НЕ в канале (проверка подписок невозможна)")
+            if not lines:
+                lines = ["Заданий нет — проверять нечего."]
+            await c.message.edit_text(
+                f"{pe('check')} <b>Доступ бота к каналам</b>\n\n"
+                + "\n".join(lines)
+                + "\n\n<i>Добавь <b>@funapp_game</b> админом канала, иначе Telegram "
+                "не даст боту проверять подписки.</i>",
+                reply_markup=kb(*nav("tasks")),
+            )
+            await c.answer()
+        elif sec == "tasks" and act == "add":
+            AWAIT[uid] = {"kind": "addtask", "msg": ref}
+            await c.message.edit_text(
+                f"{pe('plus')} <b>Новое задание</b>\n\n"
+                "Пришли одним сообщением: <code>@канал награда</code>\n"
+                "Пример: <code>@mychannel 50</code>",
+                reply_markup=kb([btn("Отмена", "a:tasks", "back")]),
+            )
+            await c.answer()
+        elif sec == "shop" and act == "add":
+            AWAIT[uid] = {"kind": "additem", "msg": ref}
+            await c.message.edit_text(
+                f"{pe('plus')} <b>Новый товар</b>\n\n"
+                "Пришли одним сообщением: <code>цена название</code>\n"
+                "Пример: <code>150 Telegram Premium 1 мес</code>",
+                reply_markup=kb([btn("Отмена", "a:shop", "back")]),
+            )
+            await c.answer()
+        elif sec == "users" and act == "p":
+            text, markup = screen_users(int(arg))
+            await c.message.edit_text(text, reply_markup=markup)
+            await c.answer()
+        elif sec == "users" and act == "v":
+            text, markup = screen_user(arg)
+            await c.message.edit_text(text, reply_markup=markup)
+            await c.answer()
+        elif sec == "users" and act == "take":
+            AWAIT[uid] = {"kind": "take", "target": int(arg), "msg": ref}
+            u = db.get_user(int(arg))
+            name = f"@{u['username']}" if u and u["username"] else f"ID {arg}"
+            await c.message.edit_text(
+                f"{pe('sad')} <b>Списать у {name}</b> (баланс {fg(u['gold'])} {pe('coin')})\n\n"
+                "Пришли сумму списания или «все» — обнулит баланс до нуля.",
+                reply_markup=kb([btn("Отмена", f"a:users:v:{arg}", "back")]),
+            )
+            await c.answer()
+        elif sec == "users" and act == "give":
+            AWAIT[uid] = {"kind": "give", "target": int(arg), "msg": ref}
+            u = db.get_user(int(arg))
+            name = f"@{u['username']}" if u and u["username"] else f"ID {arg}"
+            await c.message.edit_text(
+                f"{pe('coin')} <b>Начислить {name}</b>\n\n"
+                "Пришли число. Отрицательное спишет голду.",
+                reply_markup=kb([btn("Отмена", f"a:users:v:{arg}", "back")]),
+            )
+            await c.answer()
+        elif sec == "reqs" and act in ("done", "no"):
+            rid = int(arg)
+            r = db.done_request(rid) if act == "done" else db.decline_request(rid)
+            if not r:
+                await show(c, "reqs", f"{pe('warn')} Заявка уже обработана")
+                await c.answer()
+                return
+            try:
+                if act == "done":
+                    await BOT.send_message(r["user_id"], f"{pe('party')} Твой приз «{r['title']}» выдан!")
+                else:
+                    await BOT.send_message(r["user_id"], f"{pe('sad')} Заявка на «{r['title']}» отклонена")
+            except TelegramAPIError:
+                pass
+            await show(c, "reqs", f"{pe('check')} Выдано" if act == "done" else f"{pe('check')} Отклонено")
+            await c.answer("Готово")
+        elif sec == "bank" and act == "new":
+            AWAIT[uid] = {"kind": "bank", "msg": ref}
+            await c.message.edit_text(
+                f"{pe('coin')} <b>Банк розыгрыша</b>\n\n"
+                "Пришли сумму одним сообщением (например <code>1000</code>). "
+                "Она случайно распределится по топ-20 по голде: топ-3 — крупные доли, "
+                "места 4–10 — средние, 11–20 — меньшие. Все получат уведомления.",
+                reply_markup=kb([btn("Отмена", "a:bank", "back")]),
+            )
+            await c.answer()
+        elif sec == "bc" and act == "new":
+            AWAIT[uid] = {"kind": "bc", "msg": ref}
+            await c.message.edit_text(
+                f"{pe('info')} <b>Текст рассылки</b>\n\nПришли сообщение, которое уйдёт всем.",
+                reply_markup=kb([btn("Отмена", "a:bc", "back")]),
+            )
+            await c.answer()
+        elif sec == "bc" and act == "go":
+            st = AWAIT.pop(uid, None)
+            if not st or st.get("kind") != "bc_ready":
+                await c.answer("Нечего отправлять", show_alert=True)
+                return
+            await c.answer("Отправляю…")
+            await c.message.edit_text(f"{pe('clock')} Рассылка идёт…")
+            ok, total = await broadcast_all(st["text"])
+            await redraw(*st["msg"], "bc", f"{pe('check')} Рассылка: доставлено {ok}/{total}")
+        else:
+            await c.answer()
+
+    @DP.message(F.text.in_(["Панель", "Скрыть"]))
+    async def legacy_panel(m: Message):
+        if not is_admin(m.from_user.id):
+            raise SkipHandler
+        if m.text == "Панель":
+            await m.answer(
+                "Мини-апп удалён. Вся админка теперь внутри бота — команда /admin",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        else:
+            await m.answer("Клавиатура убрана.", reply_markup=ReplyKeyboardRemove())
+
+    # ---------- ввод текста админом ----------
+    @DP.message(F.text & ~F.text.startswith("/"))
+    async def crm_text(m: Message):
+        uid = m.from_user.id
+        st = AWAIT.get(uid)
+        if not st or not is_admin(uid):
+            raise SkipHandler  # чужие/обычные сообщения идут дальше по хендлерам
+        kind = st["kind"]
+        chat_id, mid = st["msg"]
+
+        async def done(key, note):
+            AWAIT.pop(uid, None)
+            try:
+                await m.delete()
+            except TelegramAPIError:
+                pass
+            await redraw(chat_id, mid, key, note)
+
+        async def bad(note):
+            try:
+                await m.delete()
+            except TelegramAPIError:
+                pass
+            await BOT.send_message(chat_id, note)
+
+        if kind == "addtask":
+            parts = m.text.split()
+            if len(parts) != 2 or not parts[0].startswith("@") or not parts[1].isdigit() or int(parts[1]) <= 0:
+                return await bad(f"{pe('warn')} Формат: @канал награда (например @mychannel 50)")
+            db.add_task(parts[0], int(parts[1]))
+            await done("tasks", f"{pe('check')} Задание {parts[0]} · +{parts[1]}")
+        elif kind == "additem":
+            parts = m.text.split(maxsplit=1)
+            if len(parts) != 2 or not parts[0].isdigit() or int(parts[0]) <= 0:
+                return await bad(f"{pe('warn')} Формат: цена название (например 150 Telegram Premium)")
+            db.add_item(parts[1].strip(), int(parts[0]))
+            await done("shop", f"{pe('check')} Товар «{parts[1].strip()}» · {parts[0]}")
+        elif kind == "give":
+            try:
+                amount = int(m.text.strip())
+            except ValueError:
+                return await bad(f"{pe('warn')} Нужно целое число")
+            if amount == 0 or not db.get_user(st["target"]):
+                return await bad(f"{pe('warn')} Сумма нулевая или юзер не найден")
+            db.add_gold(st["target"], amount)
+            try:
+                await BOT.send_message(st["target"], f"{pe('gift')} Админ начислил тебе {amount} {pe('coin')}")
+            except TelegramAPIError:
+                pass
+            await done("users", f"{pe('check')} Начислено {amount} юзеру {st['target']}")
+        elif kind == "take":
+            txt = (m.text or "").strip().lower()
+            target = st["target"]
+            u = db.get_user(target)
+            if not u:
+                return await bad(f"{pe('warn')} Юзер не найден")
+            if txt in ("все", "всё", "весь", "вс"):
+                old_gold = db.zero_gold(target)
+                try:
+                    await BOT.send_message(target, f"{pe('sad')} Админ списал весь твой баланс.")
+                except TelegramAPIError:
+                    pass
+                await done("users", f"{pe('check')} Баланс {target} обнулён (было {fg(old_gold)})")
+            else:
+                try:
+                    amount = int(txt)
+                except ValueError:
+                    return await bad(f"{pe('warn')} Число или «все»")
+                if amount <= 0:
+                    return await bad(f"{pe('warn')} Сумма должна быть больше нуля")
+                new_gold = db.take_gold(target, amount)
+                try:
+                    await BOT.send_message(target, f"{pe('sad')} Админ списал у тебя {fg(amount)} {pe('coin')}")
+                except TelegramAPIError:
+                    pass
+                await done("users", f"{pe('check')} Списано {fg(amount)} у {target} · осталось {fg(new_gold)}")
+        elif kind == "bank":
+            try:
+                bank = int(m.text.strip())
+            except ValueError:
+                return await bad(f"{pe('warn')} Нужно целое число")
+            if bank <= 0:
+                return await bad(f"{pe('warn')} Сумма должна быть больше нуля")
+            users = db.top_users(20)
+            if not users:
+                return await bad(f"{pe('warn')} В боте ещё нет пользователей")
+            winners = draw_bank(bank, users)
+            names = {u["id"]: u["username"] for u in users}
+            for rank, (wuid, amt) in enumerate(winners, 1):
+                db.add_gold(wuid, amt)
+                try:
+                    await BOT.send_message(
+                        wuid,
+                        f"{pe('party')} <b>Розыгрыш банка</b>\n"
+                        f"Место {rank} из {len(winners)} — тебе <b>+{fg(amt)} {pe('coin')}</b>",
+                    )
+                except TelegramAPIError:
+                    pass
+            db.add_giveaway(bank, len(winners), json.dumps(
+                [{"rank": r, "id": w, "username": names.get(w), "amount": a}
+                 for r, (w, a) in enumerate(winners, 1)]
+            ))
+            await done("bank", f"{pe('check')} Банк {fg(bank)} {pe('coin')} раздан {len(winners)} юзерам, уведомления отправлены")
+        elif kind == "bc":
+            AWAIT[uid] = {"kind": "bc_ready", "text": m.html_text, "msg": st["msg"]}
+            try:
+                await m.delete()
+            except TelegramAPIError:
+                pass
+            await BOT.edit_message_text(
+                f"{pe('info')} <b>Предпросмотр рассылки</b>\n\n{m.html_text}\n\n"
+                f"Получателей: <b>{len(db.all_user_ids())}</b>",
+                chat_id=chat_id, message_id=mid,
+                reply_markup=kb([btn("Отправить всем", "a:bc:go", "check")], [btn("Отмена", "a:bc", "back")]),
+            )
