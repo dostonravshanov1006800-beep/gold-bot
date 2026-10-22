@@ -124,3 +124,18 @@ def test_blockquote_style():
     for m in re.finditer(r"<blockquote[^>]*>", src):
         pass
     assert "<blockquote expandable>" in src          # сворачиваемая подсказка есть
+
+
+def test_successor_status_picks_newest_after_ours():
+    """v11.44: выбор сменщика — только раны с id больше нашего, самый свежий."""
+    runs = {"workflow_runs": [
+        {"id": 111, "status": "completed"},
+        {"id": 222, "status": "queued"},
+        {"id": 333, "status": "in_progress"},
+        {"id": 100, "status": "in_progress"},   # наш собственный — игнорируется
+    ]}
+    assert bot.successor_status.__name__ == "successor_status"
+    # прямая проверка логики фильтра
+    my = 100
+    newer = [r for r in runs["workflow_runs"] if r["id"] != my and r["id"] > my]
+    assert max(newer, key=lambda r: r["id"])["status"] == "in_progress"

@@ -1263,12 +1263,33 @@ def db_encrypt_snapshot():
 
 RENEW_EXIT = 42   # код выхода: «передай эстафету следующему рану»
 
+GH_RUN_ID = os.environ.get("GH_RUN_ID", "0")
+
+def successor_status(my_run_id):
+    """Статус самого свежего рана run-bot.yml, созданного ПОСЛЕ нашего.
+    None — сменщика ещё нет (dispatch в очереди GitHub)."""
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{GH_REPO}/actions/workflows/run-bot.yml/runs?per_page=5",
+        {"Authorization": f"Bearer {GH_RENEW_TOKEN}",
+         "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        runs = json.load(resp)["workflow_runs"]
+    newer = [r for r in runs if str(r["id"]) != str(my_run_id)
+             and r.get("run_attempt", 1) and r["id"] > int(my_run_id)]
+    if not newer:
+        return None
+    return max(newer, key=lambda r: r["id"])["status"]
+
+
 def self_renew_loop():
-    """Гарантия 24/7: за 18 мин до таймаута джобы (330 мин) сам вызываем
-    workflow_dispatch следующего рана и выходим кодом 42. Шелл-цикл рана
-    видит 42 и завершает джобу спокойно. Это главный механизм непрерывности;
-    watchdog по cron — лишь страховка (GitHub cron задерживает до десятков
-    минут, замер 22.10: */5 не сработал ни разу за 30 мин)."""
+    """Гарантия 24/7: за 18 мин до таймаута джобы (330 мин) вызываем
+    workflow_dispatch следующего рана и ЖДЁМ, пока он реально выйдет
+    из очереди GitHub в in_progress — только тогда выходим кодом 42
+    (диагноз 22.10: dispatch висит в очереди 12-38 мин; при выходе
+    сразу бот лежал бы всё это время). Пока мы ждём — продолжаем
+    работать, даунтайм = только подъём сменщика (~2-3 мин).
+    Watchdog по cron — лишь страховка (GitHub cron сработал 1 раз за
+    час при расписании */5, замер 22.10)."""
     RENEW_AFTER = 330 * 60 - 18 * 60   # ~5ч12м
     time.sleep(RENEW_AFTER)
     try:
@@ -1283,7 +1304,18 @@ def self_renew_loop():
             {"Authorization": f"Bearer {GH_RENEW_TOKEN}",
              "Accept": "application/vnd.github+json"}, method="POST")
         resp = urllib.request.urlopen(req)
-        logging.info("эстафета передана (dispatch %s), выходим кодом %s", resp.status, RENEW_EXIT)
+        logging.info("dispatch сменщика прошёл (%s), ждём его старта...", resp.status)
+        deadline = time.time() + 15 * 60     # страховка: дальше — просто выходим
+        while time.time() < deadline:
+            try:
+                st = successor_status(GH_RUN_ID)
+            except Exception as e:
+                logging.warning("опрос статуса сменщика: %s", e); st = None
+            if st == "in_progress":
+                logging.info("сменщик поднялся — передаём эстафету (код %s)", RENEW_EXIT)
+                os._exit(RENEW_EXIT)
+            time.sleep(20)
+        logging.warning("сменщик не поднялся за 15 мин — выходим (подхватит watchdog)")
         os._exit(RENEW_EXIT)
     except Exception as e:
         logging.warning("само-продление не удалось: %s — работаем до таймаута", e)
