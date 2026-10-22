@@ -51,6 +51,8 @@ FOOT_PAY = {3: 1.0, 4: 1.2, 5: 1.8}   # ТРИ визуальных гола (3=
     # 4=в угол, 5=девятка; подтверждено бросками): возврат, +20%, +80% -> RTP 0.80
 BASK_PAY = {4: 1.7, 5: 2.3}      # с щитком (4) и чисто (5): p=0.2+0.2 -> RTP 0.80
 BANNER_URL = "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/1a1fabe19_banner.jpg"  # баннер /start
+TASKS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/210f7351e_tasks_banner.jpg"   # баннер «Задания»
+PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6613f01a8_profile_banner.png"  # баннер «Профиль»
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -234,6 +236,21 @@ async def notify_admins(text):
 
 # ---------- безопасное обновление экрана ----------
 
+async def open_banner(c: CallbackQuery, url: str, text: str, reply_markup=None):
+    """Экран с фирменным баннером: текст сообщения нельзя превратить в фото
+    редактированием, поэтому старый экран убираем и присылаем баннер
+    с подписью и кнопками. Подпись > 1024 — текст уходит следом."""
+    try:
+        if len(text) <= 1024:
+            await c.message.answer_photo(url, caption=text, reply_markup=reply_markup)
+        else:
+            await c.message.answer_photo(url)
+            await c.message.answer(text, reply_markup=reply_markup)
+        await c.message.delete()
+    except TelegramAPIError:
+        await show(c, text, reply_markup=reply_markup)
+
+
 async def show(c: CallbackQuery, text, reply_markup=None):
     """Обновить экран из кнопки. Работает и на фото-меню (баннер /start), и на тексте.
     Раньше везде был c.message.edit_text: на фото-сообщении (подпись, не текст)
@@ -315,9 +332,18 @@ async def cmd_start(m: Message, command: CommandStart):
 @DP.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery):
     u = db.get_user(c.from_user.id)
-    await show(c, 
-        welcome_text(c.from_user.first_name or "друг"), reply_markup=menu_kb(u["gold"])
-    )
+    wt = welcome_text(c.from_user.first_name or "друг")
+    mk = menu_kb(u["gold"])
+    if c.message.photo:
+        # с экрана-баннера: текст в подписи не заменить на целое меню —
+        # баннер убираем, меню приходит свежим сообщением
+        try:
+            await c.message.delete()
+        except TelegramAPIError:
+            pass
+        await BOT.send_message(c.message.chat.id, wt, reply_markup=mk)
+    else:
+        await show(c, wt, reply_markup=mk)
     await c.answer()
 
 
@@ -347,7 +373,7 @@ def tasks_view(uid):
 @DP.callback_query(F.data == "tasks")
 async def cb_tasks(c: CallbackQuery):
     text, markup = tasks_view(c.from_user.id)
-    await show(c, text, reply_markup=markup)
+    await open_banner(c, TASKS_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
@@ -741,7 +767,7 @@ async def cb_profile(c: CallbackQuery):
     uid = c.from_user.id
     u = db.get_user(uid)
     n = db.invited_count(uid)
-    await show(c, 
+    await open_banner(c, PROFILE_BANNER_URL,
         f"{pe('wallet')} <b>Профиль</b>\n\n"
         f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
         f"Приглашено друзей: {n}\n\n"
