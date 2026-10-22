@@ -14,14 +14,20 @@ def test_game_cards_cover_all_games():
         assert "1 234" in text and "выбери ставку" in text
 
 
-def test_cards_have_no_payout_numbers_except_cubes():
-    for g in ("football", "basketball", "bowling", "dart", "slots"):
-        assert "x" not in bot.game_card_text(g, 0).split("Текстом")[0].lower().replace("текстом", "")
-    assert "x1.64" in bot.game_card_text("cubes", 0)
+def test_cards_show_multipliers_in_expandable_quote():
+    """v11.40 (просьба юзера 22.10): у КАЖДОЙ игры — свои множители
+    в сворачиваемой цитате, референс = первое фото юзера."""
+    import re
+    for g in ("football", "basketball", "bowling", "cubes", "dart", "slots"):
+        t = bot.game_card_text(g, 0)
+        assert "<blockquote expandable>" in t
+        m = re.search(r"Множители:</b>\n([^<]+)</blockquote>", t)
+        assert m and re.search(r"x\d", m.group(1)), f"у {g} нет множителей"
+        assert len(t) <= 1024, f"caption {g} длиннее 1024"
 
 
 def test_cube_multiplier_matches_constant():
-    assert f"x{bot.CUBE_X}" in bot.GAME_CARDS["cubes"][2]
+    assert f"x{bot.CUBE_X}" in bot.GAME_CARDS["cubes"][4]
 
 
 def test_game_images_cover_all_cards():
