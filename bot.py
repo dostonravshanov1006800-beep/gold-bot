@@ -805,8 +805,9 @@ async def cb_refcopy(c: CallbackQuery):
 
 @DP.callback_query(F.data == "refguide")
 async def cb_refguide(c: CallbackQuery):
-    """Справочник всех функций: сообщение меняется на месте, без спама."""
-    await c.message.edit_text(reference_pack(), reply_markup=back_kb())
+    """Справочник всех функций: через show() — работает и на фото-баннере
+    /start (edit_text на фото падает, кнопка «зависала»; 22.10, 20:47)."""
+    await show(c, reference_pack(), reply_markup=back_kb())
     await c.answer()
 
 
