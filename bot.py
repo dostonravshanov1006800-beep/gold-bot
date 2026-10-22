@@ -1170,12 +1170,12 @@ def db_decrypt_if_needed():
     """На старте: если bot.db нет, а зашифрованная копия есть — расшифровываем.
     Если ключ не задан при наличии шифра — halt. Молча стартовать с пустой
     базей НЕЛЬЗЯ: это выглядело бы как обнуление всех балансов (22.10)."""
-    if os.path.exists(DB_PATH) or not os.path.exists(DB_PATH + ".enc"):
+    if os.path.exists(db.DB_PATH) or not os.path.exists(db.DB_PATH + ".enc"):
         return
     if not DB_KEY:
         raise SystemExit("DB_KEY не задан, bot.db.enc есть, bot.db нет — старт отменён")
-    r = subprocess.run(["openssl", "aes-256-cbc", "-d", "-pbkdf2", "-in", DB_PATH + ".enc",
-                        "-out", DB_PATH, "-pass", f"env:DB_KEY"],
+    r = subprocess.run(["openssl", "aes-256-cbc", "-d", "-pbkdf2", "-in", db.DB_PATH + ".enc",
+                        "-out", db.DB_PATH, "-pass", f"env:DB_KEY"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(f"расшифровка bot.db.enc не удалась: {r.stderr[:200]}")
@@ -1187,8 +1187,8 @@ def db_encrypt_snapshot():
     if not DB_KEY:
         return False
     db.wal_checkpoint()
-    r = subprocess.run(["openssl", "aes-256-cbc", "-pbkdf2", "-in", DB_PATH,
-                        "-out", DB_PATH + ".enc", "-pass", f"env:DB_KEY"],
+    r = subprocess.run(["openssl", "aes-256-cbc", "-pbkdf2", "-in", db.DB_PATH,
+                        "-out", db.DB_PATH + ".enc", "-pass", f"env:DB_KEY"],
                        capture_output=True, text=True)
     return r.returncode == 0
 
