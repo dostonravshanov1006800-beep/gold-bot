@@ -60,7 +60,7 @@ GAME_IMG = {
     "slots":     "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/66f9e4e5c_generated_image.png",
 }
 
-TOPUP = {5: 50, 10: 110, 25: 300, 50: 650}   # Telegram Stars -> голда (с бонусом за объём)
+TOPUP = {10: 110, 25: 300, 50: 650}
 
 def topup_bonus_pct(stars):
     """Бонус за объём, % от базового курса 1⭐=10G: >=50→30%, >=25→20%, >=10→10%."""
