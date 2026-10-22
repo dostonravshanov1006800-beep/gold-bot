@@ -62,6 +62,19 @@ GAME_IMG = {
 
 TOPUP = {5: 50, 10: 110, 25: 300, 50: 650}   # Telegram Stars -> голда (с бонусом за объём)
 
+def topup_bonus_pct(stars):
+    """Бонус за объём, % от базового курса 1⭐=10G: >=50→30%, >=25→20%, >=10→10%."""
+    if stars >= 50: return 30
+    if stars >= 25: return 20
+    if stars >= 10: return 10
+    return 0
+
+def topup_gold(stars):
+    """Итоговая голда за stars звёзд (свободная сумма — та же формула, что и у пачек)."""
+    return stars * 10 + round(stars * 10 * topup_bonus_pct(stars) / 100)
+
+CUSTOM_TOPUP = {}   # uid -> timestamp ожидания свободной суммы звёзд
+
 # игры на родных анимациях-кубиках Telegram
 # Исходы игр: чёткая фраза вместо «Выпало: 5» (win для победы, fail для мимо)
 # Тексты исходов. Побеждают только те значения кубика, которые ВИЗУАЛЬНО
@@ -833,12 +846,13 @@ async def cb_topup(c: CallbackQuery):
         f"<blockquote>Курс: <b>1 {pe('stars')} = 10 G</b>. Пачка покрупнее — бонус сверху.</blockquote>", "",
     ]
     for stars, g in TOPUP.items():
-        bonus = g - stars * 10
+        pct = topup_bonus_pct(stars)
         lines.append(f"• <b>{stars} {pe('stars')}</b> → {fg(g)} G"
-                     + (f" <i>+{fg(bonus)} в подарок</i>" if bonus else ""))
+                     + (f" <i>+{pct}%</i> {pe('present')}" if pct else ""))
     lines += ["", f"{pe('party')} Голда прилетает сразу после оплаты."]
     rows = [[btn(f"{stars} Stars → {fg(g)} G", f"pay:{stars}", icon="stars")]
             for stars, g in TOPUP.items()]
+    rows.append([btn("Своя сумма", "ctop", icon="present")])
     rows.append([btn("Меню", "menu", icon="home")])
     await show(c, 
         "\n".join(lines), reply_markup=kb(*rows)
@@ -850,8 +864,8 @@ async def cb_topup(c: CallbackQuery):
 async def cb_pay(c: CallbackQuery):
     uid = c.from_user.id
     stars = int(c.data.split(":")[1])
-    gold_amt = TOPUP.get(stars)
-    if not gold_amt:
+    gold_amt = TOPUP.get(stars) or topup_gold(stars)
+    if not gold_amt or stars < 1:
         await c.answer("Пакет недоступен", show_alert=True)
         return
     db.upsert_user(uid, c.from_user.username)
@@ -864,6 +878,47 @@ async def cb_pay(c: CallbackQuery):
         prices=[LabeledPrice(label=f"{fg(gold_amt)} G", amount=stars)],
     )
     await c.answer()
+
+
+@DP.callback_query(F.data == "ctop")
+async def cb_custom_topup(c: CallbackQuery):
+    CUSTOM_TOPUP[c.from_user.id] = time.time()
+    await show(c,
+        f"{pe('present')} <b>Своя сумма</b>\n\n"
+        "Напиши, сколько звёзд купить — от <b>1</b> до <b>10 000</b>.\n"
+        f"Курс: <b>1 {pe('stars')} = 10 G</b>. Бонусы те же: "
+        "10+ {p} → +10%, 25+ → +20%, 50+ → +30%".replace("{p}", pe('stars')),
+        reply_markup=kb([btn("Отмена", "topup", icon="back")]))
+    await c.answer()
+
+
+@DP.message(F.chat.type == "private", F.text)
+async def custom_topup_amount(m: Message):
+    """Свободная сумма звёзд: только в контексте ввода после «Своя сумма»."""
+    ts = CUSTOM_TOPUP.get(m.from_user.id)
+    if not ts or time.time() - ts > 600:
+        return                          # не наш контекст — пропускаем дальше
+    t = (m.text or "").strip().replace(" ", "")
+    if not t.isdigit():
+        await m.answer(f"{pe('sad')} Числом, от 1 до 10 000 {pe('stars')}")
+        return
+    stars = int(t)
+    if not (1 <= stars <= 10000):
+        await m.answer(f"{pe('sad')} От 1 до 10 000 {pe('stars')}")
+        return
+    CUSTOM_TOPUP.pop(m.from_user.id, None)
+    gold_amt = topup_gold(stars)
+    db.upsert_user(m.from_user.id, m.from_user.username)
+    pct = topup_bonus_pct(stars)
+    await m.answer_invoice(
+        title=f"{fg(gold_amt)} голды",
+        description=f"Пополнение баланса Gold Bot на {fg(gold_amt)} G"
+                    + (f" (бонус +{pct}%)" if pct else ""),
+        payload=f"topup:{gold_amt}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=f"{fg(gold_amt)} G", amount=stars)],
+    )
 
 
 @DP.pre_checkout_query()
