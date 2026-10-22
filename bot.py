@@ -845,13 +845,13 @@ async def cb_topup(c: CallbackQuery):
         f"{pe('stars')} <b>Пополнение в Stars</b>", "",
         f"<blockquote>Курс: <b>1 {pe('stars')} = 10 G</b>. Пачка покрупнее — бонус сверху.</blockquote>", "",
     ]
+    lines += [f"{pe('party')} Голда прилетает сразу после оплаты."]
+    rows = []
     for stars, g in TOPUP.items():
         pct = topup_bonus_pct(stars)
-        lines.append(f"• <b>{stars} {pe('stars')}</b> → {fg(g)} G"
-                     + (f" <i>+{pct}%</i> {pe('present')}" if pct else ""))
-    lines += ["", f"{pe('party')} Голда прилетает сразу после оплаты."]
-    rows = [[btn(f"{stars} Stars → {fg(g)} G", f"pay:{stars}", icon="stars")]
-            for stars, g in TOPUP.items()]
+        label = f"{stars} Stars → {fg(g)} G" + (f" (+{pct}%)" if pct else "")
+        rows.append([btn(label, f"pay:{stars}",
+                         icon="present" if pct else "stars")])
     rows.append([btn("Своя сумма", "ctop", icon="present")])
     rows.append([btn("Меню", "menu", icon="home")])
     await show(c, 
