@@ -54,7 +54,7 @@ def setup(ctx):
             [b("Обзор", "home", "stats"), b("Задания", "tasks", "tasks")],
             [b("Магазин", "shop", "gift"), b("Заявки", "reqs", "tags")],
             [b("Юзеры", "users", "people"), b("Рассылка", "bc", "info")],
-            [b("Банк", "bank", "coin")],
+            [b("Банк", "bank", "coin"), b("Переводы", "tx", "right")],
         ]
 
     def screen_home():
@@ -140,6 +140,7 @@ def setup(ctx):
         return text, kb(
             [btn("Начислить", f"a:users:give:{u['id']}", "plus")],
             [btn("Отнять", f"a:users:take:{u['id']}", "cross")],
+            [btn("Переводы", f"a:users:tx:{u['id']}", "right")],
             [btn("Юзеры", "a:users", "back")],
         )
 
@@ -173,10 +174,75 @@ def setup(ctx):
         )
         return text, kb([btn("Провести розыгрыш", "a:bank:new", "party")], *nav("bank"))
 
+    def screen_tx():
+        trs = db.recent_transfers(10)
+        lines = []
+        for t in trs:
+            fn = f"@{t['fu']}" if t["fu"] else f"ID {t['from_id']}"
+            tn = f"@{t['tu']}" if t["tu"] else f"ID {t['to_id']}"
+            chat = t["chat"] or "без названия"
+            lines.append(f"{fn} → {tn} · {fg(t['amount'])} {pe('coin')} · {chat}")
+        body = "\n".join(lines) if lines else "Переводов ещё не было."
+        chats = db.q("SELECT chat_id, title, tx_on, tx_confirm FROM groups "
+                     "WHERE active=1 ORDER BY added_at DESC")
+        rows = []
+        for g in chats:
+            st = "вкл" if g["tx_on"] else "выкл"
+            th = f" · от {fg(g['tx_confirm'])}" if g["tx_confirm"] else ""
+            rows.append([btn(f"{g['title'] or g['chat_id']}: {st}{th}",
+                             f"a:tx:c:{g['chat_id']}", "right")])
+        if not chats:
+            rows.append([btn("Чатов с ботом пока нет", "a:tx:none", "right")])
+        text = (f"{pe('right')} <b>CRM · Переводы</b>\n\n{body}\n\n"
+                "Чаты — вкл/выкл и порог подтверждения:")
+        return text, kb(*rows, *nav("tx"))
+
+    def screen_tx_chat(chat_id):
+        g = db.one("SELECT chat_id, title, tx_on, tx_confirm FROM groups WHERE chat_id=?",
+                   (chat_id,))
+        if not g:
+            return screen_tx()
+        st = "вкл" if g["tx_on"] else "выкл"
+        th = f"{fg(g['tx_confirm'])}" if g["tx_confirm"] else "выкл"
+        text = (f"{pe('right')} <b>{g['title'] or g['chat_id']}</b>\n\n"
+                f"Переводы reply-ом: <b>{st}</b>\n"
+                f"Подтверждение сумм больше: <b>{th}</b>\n\n"
+                "Порог — суммы выше него отправитель подтверждает кнопкой (30 сек).")
+        return text, kb(
+            [btn(f"{'Выключить' if g['tx_on'] else 'Включить'}", f"a:tx:sw:{chat_id}",
+                 "cross" if g["tx_on"] else "check")],
+            [btn(f"Порог: выкл" if not g["tx_confirm"] else f"Порог: {fg(g['tx_confirm'])}",
+                 "a:tx:none", "right")],
+            [btn("Без подтверждения", f"a:tx:th:{chat_id}:0", "cross"),
+             btn("от 10к", f"a:tx:th:{chat_id}:10000", "warn")],
+            [btn("от 100к", f"a:tx:th:{chat_id}:100000", "warn"),
+             btn("от 1кк", f"a:tx:th:{chat_id}:1000000", "warn")],
+            [btn("от 10кк", f"a:tx:th:{chat_id}:10000000", "warn")],
+            [btn("Переводы", "a:tx", "back")],
+        )
+
+    def screen_user_tx(target):
+        u = db.get_user(int(target))
+        if not u:
+            return screen_users(0)
+        name = f"@{u['username']}" if u["username"] else f"ID {u['id']}"
+        trs = db.user_transfers(u["id"], 15)
+        lines = []
+        for t in trs:
+            other_id = t["to_id"] if t["from_id"] == u["id"] else t["from_id"]
+            other = t["tu"] if t["from_id"] == u["id"] else t["fu"]
+            oname = f"@{other}" if other else f"ID {other_id}"
+            arrow = "→" if t["from_id"] == u["id"] else "←"
+            chat = t["chat"] or "—"
+            lines.append(f"{arrow} {oname} · {fg(t['amount'])} {pe('coin')} · {chat}")
+        body = "\n".join(lines) if lines else "Переводов не было."
+        text = f"{pe('right')} <b>Переводы · {name}</b>\n\n{body}"
+        return text, kb([btn("К юзеру", f"a:users:v:{u['id']}", "back")], *nav("users"))
+
     SCREENS = {
         "home": screen_home, "tasks": screen_tasks, "shop": screen_shop,
         "reqs": screen_reqs, "users": screen_users, "bc": screen_bc,
-        "bank": screen_bank,
+        "bank": screen_bank, "tx": screen_tx,
     }
 
     async def show(c: CallbackQuery, key, note=None):
@@ -275,6 +341,26 @@ def setup(ctx):
                 "Пример: <code>150 Telegram Premium 1 мес</code>",
                 reply_markup=kb([btn("Отмена", "a:shop", "back")]),
             )
+            await c.answer()
+        elif sec == "tx" and act == "c":
+            text, markup = screen_tx_chat(int(arg))
+            await c.message.edit_text(text, reply_markup=markup)
+            await c.answer()
+        elif sec == "tx" and act == "sw":
+            db.tx_toggle(int(arg))
+            text, markup = screen_tx_chat(int(arg))
+            await c.message.edit_text(text, reply_markup=markup)
+            await c.answer()
+        elif sec == "tx" and act == "th":
+            db.tx_set_confirm(int(arg), int(parts[4]))
+            text, markup = screen_tx_chat(int(arg))
+            await c.message.edit_text(text, reply_markup=markup)
+            await c.answer("Порог обновлён")
+        elif sec == "tx" and act == "none":
+            await c.answer()
+        elif sec == "users" and act == "tx":
+            text, markup = screen_user_tx(int(arg))
+            await c.message.edit_text(text, reply_markup=markup)
             await c.answer()
         elif sec == "users" and act == "p":
             text, markup = screen_users(int(arg))

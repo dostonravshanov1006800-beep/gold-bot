@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import math
@@ -1224,7 +1225,8 @@ async def cmd_help(m: Message):
     await _open_screen(m,
         f"{pe('info')} <b>Помощь</b>\n"
         f"{pe('games')} /plays · {pe('wallet')} /balance · {pe('gift')} /bonus (раз в {BONUS_HOURS} ч) · {pe('people')} /referrals\n\n"
-        "<blockquote><b>В группах</b> — текстом: Футбол 100 · Слоты 500 · Кубы 100 малые</blockquote>"
+        "<blockquote><b>В группах</b> — текстом: Футбол 100 · Слоты 500 · Кубы 100 малые\n"
+        "Перевод другу — reply на его сообщение + сумма («держи 5000», «5к»)</blockquote>"
         + (f"\n\n{pe('crown')} Админ: /admin" if adm else ""),
         back_kb())
 
@@ -1719,6 +1721,135 @@ async def cb_gset(c: CallbackQuery):
     except TelegramAPIError:
         pass
     await c.answer("Сохранено")
+
+
+# ---------- переводы Голды reply-ом в группах (v11.46) ----------
+
+PENDING_TX = {}   # uid -> {to_id, amount, chat_id, ts, a, b} — подтверждение >30 сек
+
+
+def parse_tx_amount(text):
+    """Сумма из короткого reply-сообщения: «держи 5000», «тебе 1 500 000»,
+    «1.500.000», «+250000», «5к», «2кк». None — числа нет / мусор.
+    Дроби (1,5 · 1.5), ноль и числа длиннее 12 цифр не принимаются."""
+    t = (text or "").strip().lower()
+    if not t or t.startswith("/") or len(t) > 40 or not re.search(r"\d", t):
+        return None
+    first = re.split(r"[\s\u00a0]+", t)[0].strip(".,!?:;()\u00a0")
+    if first in GAME_ALIASES or first in RETIRED_GAMES:
+        return None                      # это игровая команда, не перевод
+    m = re.search(r"(?<![\d-])(\d[\d \u00a0.,]*)\s*(кк|kk|к|k)\b", t)
+    if m:
+        digits = re.sub(r"\D", "", m.group(1))
+        if not digits or len(digits) > 12:
+            return None
+        mul = 1_000_000 if ("кк" in m.group(2) or "kk" in m.group(2)) else 1_000
+        return int(digits) * mul if int(digits) > 0 else None
+    m = re.search(r"(?<![\d-])\d[\d \u00a0.,]*", t)
+    if not m:
+        return None
+    s = m.group(0).replace("\u00a0", " ").strip().strip(".,")
+    parts = re.split(r"[ .]+", s)
+    if not parts or not all(p.isdigit() for p in parts):
+        return None                      # дробь или мусор вида 1,5
+    if len(parts) > 1 and any(len(p) != 3 for p in parts[1:]):
+        return None                      # 1.50 — не разделитель тысяч, а дробь
+    digits = "".join(parts)
+    if not digits or len(digits) > 12:
+        return None
+    return int(digits) if int(digits) > 0 else None
+
+
+async def _tx_auto_delete(msg):
+    """Ошибки перевода удаляем через 10 секунд — не засоряем чат."""
+    async def _del():
+        await asyncio.sleep(10)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    asyncio.create_task(_del())
+
+
+async def _tx_notify_in(to_id, amount, name_b):
+    """Получателю в личку, если бот запускал и не блокировал."""
+    try:
+        await BOT.send_message(to_id,
+            f"{pe('coin')} <b>Вам пришло {fg(amount)} Голды</b> от {html.escape(name_b)}")
+    except TelegramAPIError:
+        pass
+
+
+def _tx_names(m):
+    return (m.from_user.first_name or "друг",
+            m.reply_to_message.from_user.first_name or "друг")
+
+
+@DP.message(F.chat.type.in_({"group", "supergroup"}), F.reply_to_message, F.text)
+async def reply_transfer(m: Message):
+    """Б отвечает на сообщение А короткой суммой → перевод Голды.
+    Не перевод (reply на бота/себя, длинный текст, без числа) — SkipHandler,
+    чтобы игровая логика продолжала работать как раньше."""
+    src = m.reply_to_message.from_user
+    if not src or src.is_bot or src.id == m.from_user.id:
+        raise SkipHandler
+    amount = parse_tx_amount(m.text)
+    if not amount:
+        raise SkipHandler
+    on, confirm = db.chat_tx_setting(m.chat.id)
+    if not on:
+        return                               # функция выключена в этом чате
+    uid = m.from_user.id
+    name_b, name_a = _tx_names(m)
+    if not db.get_user(src.id):
+        msg = await m.reply(
+            f"{pe('sad')} {html.escape(name_b)}, получатель ещё не запускал бота",
+            reply_markup=kb([btn("Открыть Funs", "tx:none", url=f"https://t.me/{ME}")]))
+        await _tx_auto_delete(msg)
+        return
+    db.upsert_user(uid, m.from_user.username)
+    if confirm and amount > confirm:
+        PENDING_TX[uid] = {"to_id": src.id, "amount": amount, "chat_id": m.chat.id,
+                           "ts": time.time(), "a": name_a, "b": name_b}
+        await m.reply(
+            f"{pe('warn')} {html.escape(name_b)}, подтверди перевод "
+            f"{fg(amount)} {pe('coin')} → {html.escape(name_a)}",
+            reply_markup=kb([btn("Подтвердить", "tx:ok", icon="check")]))
+        return
+    ok, bal = db.transfer(uid, src.id, amount, m.chat.id)
+    if not ok:
+        msg = await m.reply(f"{pe('sad')} Недостаточно Голды — у тебя {fg(bal)} {pe('coin')}")
+        await _tx_auto_delete(msg)
+        return
+    await m.reply(f"{pe('check')} <b>{html.escape(name_b)}</b> передал "
+                  f"<b>{html.escape(name_a)}</b> {fg(amount)} {pe('coin')}")
+    await _tx_notify_in(src.id, amount, name_b)
+
+
+@DP.callback_query(F.data == "tx:ok")
+async def cb_tx_confirm(c: CallbackQuery):
+    p = PENDING_TX.get(c.from_user.id)
+    if not p or time.time() - p["ts"] > 30:
+        PENDING_TX.pop(c.from_user.id, None)
+        await c.answer("Время вышло — отправь перевод заново", show_alert=True)
+        return
+    PENDING_TX.pop(c.from_user.id, None)
+    ok, bal = db.transfer(c.from_user.id, p["to_id"], p["amount"], p["chat_id"])
+    if not ok:
+        await c.answer(f"Недостаточно Голды — у тебя {fg(bal)}", show_alert=True)
+        try:
+            await c.message.delete()
+        except Exception:
+            pass
+        return
+    try:
+        await c.message.edit_text(
+            f"{pe('check')} <b>{html.escape(p['b'])}</b> передал "
+            f"<b>{html.escape(p['a'])}</b> {fg(p['amount'])} {pe('coin')}")
+    except Exception:
+        pass
+    await c.answer("Перевод выполнен")
+    await _tx_notify_in(p["to_id"], p["amount"], p["b"])
 
 
 @DP.message(F.chat.type.in_({"group", "supergroup", "private"}), F.text)

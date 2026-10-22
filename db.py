@@ -58,7 +58,17 @@ CREATE TABLE IF NOT EXISTS groups(
     games_on INTEGER DEFAULT 1,
     min_stake INTEGER DEFAULT 1,
     max_stake INTEGER DEFAULT 0,
-    flood_sec INTEGER DEFAULT 3
+    flood_sec INTEGER DEFAULT 3,
+    tx_on INTEGER DEFAULT 1,
+    tx_confirm INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS transfers(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id INTEGER NOT NULL,
+    to_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    ts INTEGER DEFAULT (strftime('%s','now'))
 );
 CREATE TABLE IF NOT EXISTS group_stats(
     chat_id INTEGER,
@@ -103,6 +113,12 @@ def init():
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=DELETE")
     _conn.executescript(SCHEMA)
+    for col, dflt in [("tx_on", "INTEGER DEFAULT 1"),
+                      ("tx_confirm", "INTEGER DEFAULT 0")]:
+        try:                                   # миграция групп (v11.46)
+            _conn.execute(f"ALTER TABLE groups ADD COLUMN {col} {dflt}")
+        except sqlite3.OperationalError:
+            pass
     for col, dflt in [("games_played", "INTEGER DEFAULT 0"),
                       ("games_won", "INTEGER DEFAULT 0"),
                       ("games_lost", "INTEGER DEFAULT 0"),
@@ -361,6 +377,69 @@ def add_stat(game, value):
     """Логирует исход игры на нативной анимации — для будущей калибровки выплат."""
     ex("INSERT INTO game_stats(game, value, ts) VALUES(?,?,?)",
        (game, int(value), int(time.time())))
+
+# ---------- переводы между юзерами (reply в группах) ----------
+
+TX_LOCK = __import__("threading").Lock()
+
+def transfer(from_id, to_id, amount, chat_id):
+    """Атомарный перевод (v11.46): списание + начисление + журнал одной
+    транзакцией BEGIN IMMEDIATE. Возвращает (ok, баланс отправителя)."""
+    u = one("SELECT gold FROM users WHERE id=?", (from_id,))
+    bal = u["gold"] if u else 0
+    if amount < 1 or from_id == to_id:
+        return False, bal
+    with TX_LOCK:
+        try:
+            _conn.execute("BEGIN IMMEDIATE")   # НЕ через ex(): он делает commit
+        except sqlite3.OperationalError:
+            pass                       # уже в транзакции того же соединения
+        try:
+            row = one("SELECT gold FROM users WHERE id=?", (from_id,))
+            if not row or row["gold"] < amount:
+                try: _conn.execute("ROLLBACK")
+                except Exception: pass
+                return False, (row["gold"] if row else 0)
+            _conn.execute("UPDATE users SET gold=gold-? WHERE id=?", (amount, from_id))
+            cur = _conn.execute("UPDATE users SET gold=gold+? WHERE id=?", (amount, to_id))
+            if cur.rowcount != 1:      # получатель исчез — откатываем всё
+                try: _conn.execute("ROLLBACK")
+                except Exception: pass
+                return False, row["gold"]
+            _conn.execute("INSERT INTO transfers(from_id,to_id,amount,chat_id) "
+                          "VALUES(?,?,?,?)", (from_id, to_id, amount, chat_id))
+            _conn.commit()
+            return True, row["gold"] - amount
+        except Exception:
+            try: _conn.execute("ROLLBACK")
+            except Exception: pass
+            raise
+
+def recent_transfers(limit=10):
+    return q("SELECT t.*, fu.username AS fu, tu.username AS tu, g.title AS chat "
+             "FROM transfers t "
+             "LEFT JOIN users fu ON fu.id=t.from_id LEFT JOIN users tu ON tu.id=t.to_id "
+             "LEFT JOIN groups g ON g.chat_id=t.chat_id "
+             "ORDER BY t.id DESC LIMIT ?", (limit,))
+
+def user_transfers(uid, limit=15):
+    return q("SELECT t.*, fu.username AS fu, tu.username AS tu, g.title AS chat "
+             "FROM transfers t "
+             "LEFT JOIN users fu ON fu.id=t.from_id LEFT JOIN users tu ON tu.id=t.to_id "
+             "LEFT JOIN groups g ON g.chat_id=t.chat_id "
+             "WHERE t.from_id=? OR t.to_id=? ORDER BY t.id DESC LIMIT ?",
+             (uid, uid, limit))
+
+def chat_tx_setting(chat_id):
+    """(включено ли, порог подтверждения). Чат вне базы — дефолт (1, 0)."""
+    r = one("SELECT tx_on, tx_confirm FROM groups WHERE chat_id=?", (chat_id,))
+    return (r["tx_on"], r["tx_confirm"]) if r else (1, 0)
+
+def tx_toggle(chat_id):
+    ex("UPDATE groups SET tx_on = 1 - tx_on WHERE chat_id=?", (chat_id,))
+
+def tx_set_confirm(chat_id, n):
+    ex("UPDATE groups SET tx_confirm=? WHERE chat_id=?", (n, chat_id))
 
 def log_update(chat_id, chat_type, user_id, text):
     """Лог доставленных боту сообщений — диагностика privacy mode в группах."""
