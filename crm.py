@@ -78,7 +78,9 @@ def setup(ctx):
     """ctx: bot, dp, pe, btn, kb, fg, is_admin, broadcast_all."""
     DP, BOT = ctx["dp"], ctx["bot"]
     pe, btn, kb, fg = ctx["pe"], ctx["btn"], ctx["kb"], ctx["fg"]
-    is_admin, broadcast_all = ctx["is_admin"], ctx["broadcast_all"]
+    is_admin = ctx["is_admin"]
+    broadcast_all = ctx["broadcast_all"]
+    broadcast_groups = ctx["broadcast_groups"]
 
     # ---------- экраны ----------
     def nav(active):

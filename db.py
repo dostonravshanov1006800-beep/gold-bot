@@ -49,6 +49,19 @@ CREATE TABLE IF NOT EXISTS requests(
     created INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS promos(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    amount INTEGER NOT NULL,
+    max_uses INTEGER DEFAULT 0,
+    uses INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS promo_used(
+    promo_id INTEGER,
+    user_id INTEGER,
+    PRIMARY KEY(promo_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS groups(
     chat_id INTEGER PRIMARY KEY,
     title TEXT,
@@ -237,6 +250,48 @@ def stats():
 
 
 # ---------- tasks ----------
+
+def add_promo(code, amount, max_uses=0):
+    ex("INSERT OR IGNORE INTO promos(code, amount, max_uses) VALUES(?,?,?)",
+       (code, amount, max_uses))
+
+
+def promos():
+    return q("SELECT * FROM promos ORDER BY id DESC")
+
+
+def set_promo(pid, active):
+    ex("UPDATE promos SET active=? WHERE id=?", (1 if active else 0, pid))
+
+
+def del_promo(pid):
+    ex("DELETE FROM promos WHERE id=?", (pid,))
+    ex("DELETE FROM promo_used WHERE promo_id=?", (pid,))
+
+
+def redeem_promo(code, uid):
+    """Активация промокода. Возвращает (статус, сумма).
+    Статусы: ok · bad · inactive · used · limit."""
+    r = one("SELECT * FROM promos WHERE code=?", (code.strip().upper(),))
+    if not r:
+        return "bad", 0
+    if not r["active"]:
+        return "inactive", r["amount"]
+    if one("SELECT 1 FROM promo_used WHERE promo_id=? AND user_id=?",
+           (r["id"], uid)):
+        return "used", r["amount"]
+    if r["max_uses"] and r["uses"] >= r["max_uses"]:
+        return "limit", r["amount"]
+    ex("INSERT OR IGNORE INTO promo_used VALUES(?,?)", (r["id"], uid))
+    ex("UPDATE promos SET uses=uses+1 WHERE id=?", (r["id"],))
+    add_gold(uid, r["amount"])
+    return "ok", r["amount"]
+
+
+def all_group_ids():
+    return [g["chat_id"] for g in
+            q("SELECT chat_id FROM groups WHERE active=1")]
+
 
 def add_task(channel, reward):
     ex("INSERT INTO tasks(channel, reward) VALUES(?,?)", (channel, reward))

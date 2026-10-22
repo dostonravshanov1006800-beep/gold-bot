@@ -1145,6 +1145,23 @@ async def cmd_take(m: Message):
     await m.answer(f"{pe('sad')} {uid}: -{amount} {pe('coin')} · осталось {fg(new_gold)}")
 
 
+async def broadcast_groups(text: str) -> tuple:
+    """Пост в все группы, где бот активен. HTML, при ошибке — чистый текст."""
+    ok = 0
+    ids = db.all_group_ids()
+    for cid in ids:
+        try:
+            await BOT.send_message(cid, text, parse_mode="HTML")
+            ok += 1
+        except TelegramAPIError:
+            try:
+                await BOT.send_message(cid, text, parse_mode=None)
+                ok += 1
+            except TelegramAPIError:
+                continue
+    return ok, len(ids)
+
+
 async def broadcast_all(text: str, chat_to_notify=None) -> tuple:
     """Рассылка всем: HTML (премиум-эмодзи <tg-emoji>), при ошибке — чистый текст."""
     ok = 0
@@ -1267,8 +1284,9 @@ def reference_pack():
            "Ставки: 10 · 50 · 100 · 500 · 1000 · 5000 · «все». "
            "Точные множители — в карточке каждой игры (/plays → игра).",
            f"{pe('games')} Игры")
-        + "\n" + bq(f"Раз в {BONUS_HOURS} часа — бесплатная Голда: /bonus или кнопка меню.",
-           f"{pe('gift')} Бонус")
+        + "\n" + bq(f"Раз в {BONUS_HOURS} часа — бесплатная Голда: /bonus или кнопка меню.\n"
+           "Промокоды: напиши «промокод КОД» — в личке или в любой группе с ботом.",
+           f"{pe('gift')} Бонус и промокоды")
         + "\n" + bq("Оплата Telegram Stars, Голда приходит сразу.\n"
            "10 Stars → 110 G (+10%) · 25 Stars → 300 G (+20%) · 50 Stars → 650 G (+30%). "
            "Своя сумма — любая.",
@@ -1310,6 +1328,7 @@ import crm
 crm.setup({
     "bot": BOT, "dp": DP, "pe": pe, "btn": btn, "kb": kb, "fg": fg,
     "is_admin": is_admin, "broadcast_all": broadcast_all,
+    "broadcast_groups": broadcast_groups,
 })
 
 # ---------- синхронизация базы в git ----------
@@ -1941,6 +1960,21 @@ async def text_cmd(m: Message):
         for k in sorted(_seen, key=_seen.get)[:2500]:
             _seen.pop(k, None)
     db.log_update(m.chat.id, m.chat.type, m.from_user.id, (m.text or "")[:60])
+    low = (m.text or "").lower()
+    if low.startswith(("промокод ", "промо ")) and len(m.text.split()) == 2:
+        code = m.text.split()[1].strip().upper()
+        status, amount = db.redeem_promo(code, m.from_user.id)
+        db.upsert_user(m.from_user.id, m.from_user.username)
+        if status == "ok":
+            await m.reply(f"{pe('party')} Промокод активирован: "
+                          f"<b>+{fg(amount)} {pe('coin')}</b>!")
+        elif status == "used":
+            await m.reply(f"{pe('warn')} Ты уже активировал этот промокод")
+        elif status in ("limit", "inactive"):
+            await m.reply(f"{pe('sad')} Промокод больше не действует")
+        else:
+            await m.reply(f"{pe('warn')} Такого промокода нет")
+        return
     cmd = parse_group_cmd(m.text)
     if not cmd:
         return                          # обычная болтовня — молча
