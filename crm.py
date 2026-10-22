@@ -91,6 +91,7 @@ def setup(ctx):
             [b("Магазин", "shop", "gift"), b("Заявки", "reqs", "tags")],
             [b("Юзеры", "users", "people"), b("Рассылка", "bc", "info")],
             [b("Банк", "bank", "coin"), b("Переводы", "tx", "right")],
+            [b("Промокоды", "promo", "star"), b("В группы", "bcg", "info")],
         ]
 
     def screen_home():
@@ -275,10 +276,43 @@ def setup(ctx):
         text = f"{pe('right')} <b>Переводы · {name}</b>\n\n{body}"
         return text, kb([btn("К юзеру", f"a:users:v:{u['id']}", "back")], *nav("users"))
 
+    def screen_promo():
+        rows, lines = [], []
+        for p in db.promos():
+            lim = f"{p['uses']}/{p['max_uses']}" if p["max_uses"] else f"{p['uses']}/∞"
+            st = "" if p["active"] else " · выкл"
+            lines.append(f"<b>{p['code']}</b> · +{fg(p['amount'])} {pe('coin')} · {lim}{st}")
+            rows.append([
+                btn(("Выключить" if p["active"] else "Включить") + f" {p['code']}",
+                     f"a:promo:t:{p['id']}", "right"),
+                btn(f"Удалить {p['code']}", f"a:promo:del:{p['id']}", "trash")])
+        body = "\n".join(lines) or "Промокодов пока нет."
+        text = (f"{pe('star')} <b>CRM · Промокоды</b>\n\n{body}\n\n"
+                "Формат создания: <code>КОД СУММА [лимит]</code>. Лимит — сколько "
+                "раз можно активировать, без него — ∞. Один юзер — одна активация.")
+        rows.append([btn("Создать промокод", "a:promo:new", "plus")])
+        return text, kb(*rows, *nav("promo"))
+
+    def screen_bcg():
+        chats = db.q("SELECT chat_id, title FROM groups "
+                     "WHERE active=1 ORDER BY added_at DESC")
+        rows = [[btn(g["title"] or f"ID {g['chat_id']}",
+                     f"a:bcg:g:{g['chat_id']}", "right")] for g in chats]
+        if not rows:
+            rows = [[btn("Групп с ботом пока нет", "a:tx:none", "right")]]
+        rows.append([btn("Во все группы сразу", "a:bcg:new", "party")])
+        body = ("\n".join("• " + (g["title"] or f"ID {g['chat_id']}")
+                           for g in chats)) or "Групп пока нет."
+        text = (f"{pe('info')} <b>CRM · Пост в группы</b>\n\n{body}\n\n"
+                "Выбери группу — текст уйдёт только в неё. "
+                "«Во все группы сразу» — в каждую, где бот активен.")
+        return text, kb(*rows, *nav("bcg"))
+
     SCREENS = {
         "home": screen_home, "tasks": screen_tasks, "shop": screen_shop,
         "reqs": screen_reqs, "users": screen_users, "bc": screen_bc,
         "bank": screen_bank, "tx": screen_tx,
+        "promo": screen_promo, "bcg": screen_bcg,
     }
 
     async def show(c: CallbackQuery, key, note=None):
@@ -395,6 +429,65 @@ def setup(ctx):
             await c.answer("Порог обновлён")
         elif sec == "tx" and act == "none":
             await c.answer()
+        elif sec == "promo" and act == "new":
+            _await_set(uid, {"kind": "promo", "msg": ref})
+            await c.message.edit_text(
+                f"{pe('star')} <b>Новый промокод</b>\n\n"
+                "Пришли одним сообщением: <code>КОД СУММА [лимит]</code>\n"
+                "Примеры: <code>GOLD500 500</code> · <code>NEWYEAR 1000 100</code>\n"
+                "Лимит — без него код безлимитный. Активация: «промокод КОД».",
+                reply_markup=kb([btn("Отмена", "a:promo", "back")]))
+            await c.answer()
+        elif sec == "promo" and act == "t":
+            p = db.one("SELECT active FROM promos WHERE id=?", (int(arg),))
+            db.set_promo(int(arg), not p["active"])
+            await show(c, "promo", f"{pe('check')} Промокод обновлён")
+            await c.answer()
+        elif sec == "promo" and act == "del":
+            db.del_promo(int(arg))
+            await show(c, "promo", f"{pe('check')} Промокод удалён")
+            await c.answer()
+        elif sec == "bcg" and act == "new":
+            _await_set(uid, {"kind": "bcg", "target": None, "msg": ref})
+            await c.message.edit_text(
+                f"{pe('info')} <b>Пост во все группы</b>\n\n"
+                "Пришли сообщение — оно появится в каждой группе, где бот активен.",
+                reply_markup=kb([btn("Отмена", "a:bcg", "back")]))
+            await c.answer()
+        elif sec == "bcg" and act == "g":
+            g = db.one("SELECT title FROM groups WHERE chat_id=?", (int(arg),))
+            if not g:
+                await show(c, "bcg", f"{pe('warn')} Группа не найдена")
+                await c.answer()
+                return
+            _await_set(uid, {"kind": "bcg", "target": int(arg), "msg": ref})
+            await c.message.edit_text(
+                f"{pe('info')} <b>Пост в «{g['title'] or arg}»</b>\n\n"
+                "Пришли сообщение — оно появится только в этой группе.",
+                reply_markup=kb([btn("Отмена", "a:bcg", "back")]))
+            await c.answer()
+        elif sec == "bcg" and act == "go":
+            st = _await_pop(uid)
+            if not st or st.get("kind") != "bcg_ready":
+                await c.answer("Нечего отправлять", show_alert=True)
+                return
+            await c.answer("Отправляю…")
+            target = st.get("target")
+            await c.message.edit_text(f"{pe('clock')} Публикую…")
+            if target:
+                try:
+                    await BOT.send_message(target, st["text"], parse_mode="HTML")
+                    note = f"{pe('check')} Отправлено"
+                except TelegramAPIError:
+                    try:
+                        await BOT.send_message(target, st["text"], parse_mode=None)
+                        note = f"{pe('check')} Отправлено (без оформления)"
+                    except TelegramAPIError:
+                        note = f"{pe('sad')} Не доставлено — бот исключён из группы"
+            else:
+                ok, total = await broadcast_groups(st["text"])
+                note = f"{pe('check')} Опубликовано в {ok}/{total} группах"
+            await redraw(*st["msg"], "bcg", note)
         elif sec == "users" and act == "tx":
             text, markup = screen_user_tx(int(arg))
             await c.message.edit_text(text, reply_markup=markup)
@@ -587,6 +680,36 @@ def setup(ctx):
                  for r, (w, a) in enumerate(winners, 1)]
             ))
             await done("bank", f"{pe('check')} Банк {fg(bank)} {pe('coin')} раздан {len(winners)} юзерам, уведомления отправлены")
+        elif kind == "promo":
+            parts = m.text.split()
+            code = parts[0].upper()
+            ok_fmt = (2 <= len(parts) <= 3 and code.isalnum() and 3 <= len(code) <= 15
+                      and parts[1].isdigit() and int(parts[1]) > 0
+                      and (len(parts) == 2 or (parts[2].isdigit() and int(parts[2]) > 0)))
+            if not ok_fmt:
+                return await bad(f"{pe('warn')} Формат: КОД СУММА [лимит] — например GOLD500 500")
+            if db.one("SELECT 1 FROM promos WHERE code=?", (code,)):
+                return await bad(f"{pe('warn')} Промокод {code} уже существует")
+            db.add_promo(code, int(parts[1]), int(parts[2]) if len(parts) == 3 else 0)
+            await done("promo", f"{pe('check')} Промокод {code} создан: +{fg(int(parts[1]))} {pe('coin')}")
+        elif kind == "bcg":
+            _await_set(uid, {"kind": "bcg_ready", "text": m.html_text,
+                             "target": st.get("target"), "msg": st["msg"]})
+            try:
+                await m.delete()
+            except TelegramAPIError:
+                pass
+            tgt = st.get("target")
+            if tgt:
+                g = db.one("SELECT title FROM groups WHERE chat_id=?", (tgt,))
+                dst = f"Группа: <b>{(g and g['title']) or tgt}</b>"
+            else:
+                dst = f"Групп: <b>{len(db.all_group_ids())}</b>"
+            await BOT.edit_message_text(
+                f"{pe('info')} <b>Предпросмотр поста</b>\n\n{m.html_text}\n\n{dst}",
+                chat_id=chat_id, message_id=mid,
+                reply_markup=kb([btn("Отправить", "a:bcg:go", "check")],
+                                [btn("Отмена", "a:bcg", "back")]))
         elif kind == "bc":
             _await_set(uid, {"kind": "bc_ready", "text": m.html_text, "msg": st["msg"]})
             try:
