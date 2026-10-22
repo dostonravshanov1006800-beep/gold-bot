@@ -207,6 +207,7 @@ def menu_kb(gold=0):
         [btn("Игры", "games", icon="games"), btn("Магазин", "shop", icon="shop")],
         [btn("Бонус", "bonus", icon="gift"), btn("Пополнить", "topup", icon="stars")],
         [btn("Топ", "top", icon="trophy")],
+        [btn("Справочник", "refguide", icon="info")],
     )
 
 
@@ -307,10 +308,7 @@ async def cmd_start(m: Message, command: CommandStart):
         )
     else:
         await m.answer(text, reply_markup=menu_kb(u["gold"]))   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
-        # Игры/Магазин/Бонус/Пополнить/Топ); карточка заданий — только по кнопке.
-    # v11.48: полное меню кнопок — выше, а справочник всех функций идёт
-    # вторым сообщением (подпись к фото ограничена 1024 символами)
-    await m.answer(reference_pack())
+        # Игры/Магазин/Бонус/Пополнить/Топ/Справочник)
         # В группах меню не нужно: там всё работает текстом («футбол 100»).
 
 
@@ -802,6 +800,13 @@ async def on_inline(q: InlineQuery):
 async def cb_refcopy(c: CallbackQuery):
     uid = c.from_user.id
     await c.message.answer(f"https://t.me/{ME}?start=ref_{uid}")
+    await c.answer()
+
+
+@DP.callback_query(F.data == "refguide")
+async def cb_refguide(c: CallbackQuery):
+    """Справочник всех функций: сообщение меняется на месте, без спама."""
+    await c.message.edit_text(reference_pack(), reply_markup=back_kb())
     await c.answer()
 
 
