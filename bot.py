@@ -1285,7 +1285,7 @@ def reference_pack():
            "Точные множители — в карточке каждой игры (/plays → игра).",
            f"{pe('games')} Игры")
         + "\n" + bq(f"Раз в {BONUS_HOURS} часа — бесплатная Голда: /bonus или кнопка меню.\n"
-           "Промокоды: напиши «промокод КОД» — в личке или в любой группе с ботом.",
+           "Промокоды: напиши код (или «промокод КОД») — в личке или в любой группе.",
            f"{pe('gift')} Бонус и промокоды")
         + "\n" + bq("Оплата Telegram Stars, Голда приходит сразу.\n"
            "10 Stars → 110 G (+10%) · 25 Stars → 300 G (+20%) · 50 Stars → 650 G (+30%). "
@@ -1960,14 +1960,29 @@ async def text_cmd(m: Message):
         for k in sorted(_seen, key=_seen.get)[:2500]:
             _seen.pop(k, None)
     db.log_update(m.chat.id, m.chat.type, m.from_user.id, (m.text or "")[:60])
+    if m.chat.type in ("group", "supergroup"):
+        db.upsert_group(m.chat.id,
+                        getattr(m.chat, "title", None) or f"ID {m.chat.id}",
+                        m.from_user.id)
     low = (m.text or "").lower()
-    if low.startswith(("промокод ", "промо ")) and len(m.text.split()) == 2:
-        code = m.text.split()[1].strip().upper()
-        status, amount = db.redeem_promo(code, m.from_user.id)
+    words = (m.text or "").split()
+    pcode = None
+    if len(words) == 2 and low.startswith(("промокод ", "промо ")):
+        pcode = words[1]
+    elif 1 <= len(words) <= 2 and len(words[0]) >= 3:
+        # голый код: «NEWYEAR» или «NEWYEAR 100» — без слова «промокод»
+        maybe = words[0].strip().upper()
+        if maybe != "ВСЕ" and db.one(
+                "SELECT 1 FROM promos WHERE code=? AND active=1", (maybe,)):
+            pcode = words[0]
+    if pcode:
         db.upsert_user(m.from_user.id, m.from_user.username)
+        status, amount = db.redeem_promo(pcode, m.from_user.id)
         if status == "ok":
+            bal = db.get_user(m.from_user.id)["gold"]
             await m.reply(f"{pe('party')} Промокод активирован: "
-                          f"<b>+{fg(amount)} {pe('coin')}</b>!")
+                          f"<b>+{fg(amount)} {pe('coin')}</b>!\n"
+                          f"Баланс: <b>{fg(bal)} {pe('coin')}</b>")
         elif status == "used":
             await m.reply(f"{pe('warn')} Ты уже активировал этот промокод")
         elif status in ("limit", "inactive"):
