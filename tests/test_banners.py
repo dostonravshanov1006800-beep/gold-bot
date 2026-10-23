@@ -1,5 +1,5 @@
 """v12.10: баннер «Справочник» + у каждой секции свой баннер."""
-import os, sys, asyncio, importlib.util
+import os, sys, asyncio, types, importlib.util
 os.environ.update(BOT_TOKEN="1:test", PREMIUM_UI="1")
 _dir = os.path.dirname(__file__)
 spec = importlib.util.spec_from_file_location(
@@ -13,6 +13,7 @@ class FakeMsg:
         from types import SimpleNamespace
         self.from_user = SimpleNamespace(id=uid, username=None)
         self.chat = SimpleNamespace(id=uid, type="private")   # v12.15: swap-экраны
+        self.message_id = 400                                 # v12.18: id команды
         self.sent = []          # ('photo'|'text', payload)
     async def answer(self, text=None, **k): self.sent.append(("text", text))
     async def answer_photo(self, photo=None, caption=None, **k):
@@ -112,10 +113,11 @@ class SentMsg:
 
 class SwapMsg:
     """Сообщение из ЛС: answer/answer_photo возвращают SentMsg."""
-    def __init__(self, cid=777):
+    def __init__(self, cid=777, mid=400):
         from types import SimpleNamespace
         self.chat = FakeChat(cid)
         self.from_user = SimpleNamespace(id=cid, username=None)
+        self.message_id = mid          # id сообщения-команды юзера
         self._n = 5000
     async def answer(self, text=None, **k):
         self._n += 1; return SentMsg(self._n)
@@ -125,6 +127,7 @@ class SwapMsg:
 class FakeBotApi:
     def __init__(self): self.deleted = []
     async def delete_message(self, cid, mid): self.deleted.append((cid, mid))
+    async def set_chat_menu_button(self, chat_id=None, menu_button=None): pass
 
 def test_commands_swap_screens():
     """v12.15: /bonus потом /plays — экран /bonus удаляется,
@@ -145,7 +148,7 @@ def test_commands_swap_screens():
             "одна команда = один экран-баннер"
     finally:
         b.BOT = real_bot
-        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")
 
 def test_help_swaps_single_bubble():
     """v12.17: /help = ОДНО сообщение (баннер + подпись-справочник),
@@ -160,7 +163,7 @@ def test_help_swaps_single_bubble():
         assert v and "," not in v, f"один пузырь = один id: {v}"
     finally:
         b.BOT = real_bot
-        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")
 
 def test_groups_do_not_delete_screens():
     """В группе экраны разных игроков — ничего не удаляем и не помним."""
@@ -173,7 +176,7 @@ def test_groups_do_not_delete_screens():
         assert api.deleted == [], "в группах удаление запрещено"
     finally:
         b.BOT = real_bot
-        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")
 
 
 def test_clan_screen_uses_clan_banner():
@@ -207,3 +210,52 @@ def test_reference_caption_fits_telegram_limit():
     vis = re.sub(r"<[^>]+>", "", b.reference_caption())
     assert len(vis) <= 1024, f"подпись {len(vis)} знаков — Telegram отклонит"
     assert "Джекпот" in vis and "Клан" in vis and "Обмен" in vis
+
+
+def test_old_user_command_deleted_on_new_command():
+    """v12.18: /bonus (msg 100) -> /plays (msg 101): сообщение «/bonus»
+    юзера удаляется вместе со старым экраном."""
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        m1 = SwapMsg(mid=100)
+        asyncio.run(b.cmd_bonus(m1))
+        screens_after_bonus = len(api.deleted)
+        m2 = SwapMsg(mid=101)
+        asyncio.run(b.cmd_plays(m2))
+        assert (777, 100) in api.deleted, "команда /bonus должна удалиться"
+        assert (777, 101) not in api.deleted, "текущая команда живёт"
+        assert b.db.get_meta("cmd:777") == "101"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")
+
+def test_start_and_balance_track_commands_too():
+    """v12.18: /start и /balance тоже запоминают команду."""
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        m1 = SwapMsg(mid=200)
+        m1.from_user.first_name = "Тест"
+        asyncio.run(b.cmd_start(m1, types.SimpleNamespace(args="")))
+        assert b.db.get_meta("cmd:777") == "200"
+        m2 = SwapMsg(mid=201)
+        asyncio.run(b.cmd_balance(m2))
+        assert (777, 200) in api.deleted
+        assert b.db.get_meta("cmd:777") == "201"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")
+
+def test_button_navigation_keeps_command_message():
+    """v12.18: навигация кнопками НЕ трогает сообщение-команду."""
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        m1 = SwapMsg(mid=300)
+        asyncio.run(b.cmd_bonus(m1))
+        before = list(api.deleted)
+        c = FakeCb()
+        asyncio.run(b.cb_games(c))          # кнопка «Игры» — навигация
+        assert list(api.deleted) == before or (777, 300) not in api.deleted
+        assert b.db.get_meta("cmd:777") == "300", "команда живёт при кнопках"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%' OR key LIKE 'cmd:%'")

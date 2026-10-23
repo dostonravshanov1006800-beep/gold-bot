@@ -368,7 +368,8 @@ async def cmd_start(m: Message, command: CommandStart):
         )
     else:
         sent = await m.answer(text, reply_markup=menu_kb(u["gold"]))
-    await _screen_remember(m, sent)   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
+    await _screen_remember(m, sent)
+    _cmd_remember(m)   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
         # Игры/Магазин/Бонус/Пополнить/Топ/Справочник)
         # В группах меню не нужно: там всё работает текстом («футбол 100»).
 
@@ -1911,7 +1912,10 @@ async def cmd_stats(m: Message):
 # В группах НЕ применяется: там экраны принадлежат разным игрокам.
 
 async def _screen_forget(m: Message):
-    """Удалить прошлый экран-команды этого чата (id из meta)."""
+    """Удалить прошлый экран И прошлое сообщение-команду этого чата
+    (id из meta). v12.18: сама команда юзера (/bonus и т.п.) тоже
+    стирается, когда приходит другая команда — в чате остаётся один
+    экран и одна живая команда."""
     if m.chat.type != "private":
         return
     v = db.get_meta(f"screen:{m.chat.id}") or ""
@@ -1921,6 +1925,13 @@ async def _screen_forget(m: Message):
         except TelegramAPIError:
             pass          # уже удалён / старше 48ч — не страшно
     db.put_meta(f"screen:{m.chat.id}", "")
+    cv = db.get_meta(f"cmd:{m.chat.id}") or ""   # прошлый "/команда" юзера
+    for mid in [x for x in cv.split(",") if x]:
+        try:
+            await BOT.delete_message(m.chat.id, int(mid))
+        except TelegramAPIError:
+            pass
+    db.put_meta(f"cmd:{m.chat.id}", "")
 
 async def _screen_remember(m, *sent):
     """Запомнить id сообщений нового экрана (только личка)."""
@@ -1929,10 +1940,18 @@ async def _screen_remember(m, *sent):
     db.put_meta(f"screen:{m.chat.id}",
                 ",".join(str(s.message_id) for s in sent if s))
 
+def _cmd_remember(m):
+    """v12.18: запомнить id сообщения-команды юзера — ТОЛЬКО из
+    командных хендлеров (кнопки через open_banner сюда не попадают)."""
+    if m.chat.type != "private":
+        return
+    db.put_meta(f"cmd:{m.chat.id}", str(m.message_id))
+
 async def _open_screen(m: Message, text, markup):
     await _screen_forget(m)
     sent = await m.answer(text, reply_markup=markup)
     await _screen_remember(m, sent)
+    _cmd_remember(m)
 
 
 @DP.message(Command("balance"), F.chat.type == "private")
@@ -1960,6 +1979,7 @@ async def cmd_bonus(m: Message):
     except TelegramAPIError:
         sent = await m.answer(text, reply_markup=markup, parse_mode="HTML")
     await _screen_remember(m, sent)
+    _cmd_remember(m)
 
 
 @DP.message(Command("plays"), F.chat.type == "private")
@@ -1980,6 +2000,7 @@ async def cmd_plays(m: Message):
     except TelegramAPIError:
         sent = await m.answer(caption, reply_markup=markup, parse_mode="HTML")
     await _screen_remember(m, sent)
+    _cmd_remember(m)
 
 
 @DP.message(Command("referrals"), F.chat.type == "private")
@@ -2124,6 +2145,7 @@ async def cmd_help(m: Message):
     except TelegramAPIError:
         sent = await m.answer(cap, reply_markup=back_kb())
     await _screen_remember(m, sent)
+    _cmd_remember(m)
 
 # ---------- CRM-админка внутри бота ----------
 import crm
