@@ -1644,15 +1644,15 @@ async def group_info(m: Message, uid, kind):
             f"Имя: <b>{name}</b>\n"
             f"ID: <code>{uid}</code>\n"
             f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
-            f"Игр сыграно: <b>{played}</b> · Побед: <b>{won}</b> · Поражений: <b>{lost}</b>\n"
-            f"Выигрыш в группе: <b>{fg(twon)} {pe('coin')}</b>\n"
-            f"Приглашено друзей: {n}\n\n"
-            f"Задания, магазин и призы — в личке: https://t.me/{ME}"
+            f"{pe('stats')} Игр: <b>{played}</b> · Побед: <b>{won}</b> · Поражений: <b>{lost}</b>\n"
+            f"{pe('trophy')} Выигрыш в группе: <b>{fg(twon)} {pe('coin')}</b>\n"
+            f"{pe('people')} Приглашено друзей: <b>{n}</b>\n\n"
+            f"{pe('tasks')} Задания, магазин и призы — в личке: https://t.me/{ME}"
         )
     elif kind in ("задания", "магазин"):
         await safe_reply(
-            m, f"Открой в личных сообщениях со мной — https://t.me/{ME}\n"
-               "Задания, магазин и призы живут там, а не в группе.")
+            m, f"{pe('shop')} Задания и магазин живут в личке — открой: https://t.me/{ME}\n"
+               "Там же призы и профиль.")
     elif kind == "зов":
         name = m.from_user.first_name or "друг"
         await safe_reply(m,
@@ -1668,8 +1668,8 @@ async def group_info(m: Message, uid, kind):
         )
     elif kind == "помощь":
         await safe_reply(m,
-            f"{pe('info')} <b>Помощь</b>\n\n"
-            "<blockquote>Футбол 100 · Кубы 100 большие — название и ставка</blockquote>\n"
+            f"{pe('info')} <b>Помощь в группе</b>\n\n"
+            "<blockquote>Футбол 100 · Кубы 100 большие — название игры и ставка</blockquote>\n"
             f"{pe('wallet')} Баланс (б) · Профиль (я) · Бонус · Топ\n"
             f"{pe('tasks')} Задания и магазин — в личке: https://t.me/{ME}"
         )
@@ -1693,7 +1693,7 @@ async def group_info(m: Message, uid, kind):
             mark = medals[i] if i < 3 else f" {i + 1}."
             lines.append(f"{mark} {tname} · {fg(t['gold'])} {pe('coin')}")
         body = "\n".join(lines) or "Пока никого — стань первым!"
-        await safe_reply(m, f"{pe('trophy')} <b>Топ по голде</b>\n\n{body}")
+        await safe_reply(m, f"{pe('trophy')} <b>Топ по Голде</b>\n\n{body}")
     elif kind == "бонус":
         now = int(time.time())
         left = BONUS_HOURS * 3600 - (now - u["last_bonus"])
@@ -1751,12 +1751,12 @@ async def is_group_admin(uid, chat_id):
 
 def group_settings_view(chat_id, g):
     text = (
-        f"<b>Настройки группы</b>\n\n"
-        f"Игры: <b>{'включены' if g['games_on'] else 'выключены'}</b>\n"
-        f"Мин. ставка: <b>{fg(g['min_stake'])} G</b>\n"
-        f"Макс. ставка: <b>{fg(g['max_stake']) if g['max_stake'] else 'без лимита'}</b>\n"
-        f"Анти-флуд: <b>{g['flood_sec']} с</b> между играми группы\n\n"
-        f"Менять может только админ группы."
+        f"{pe('edit')} <b>Настройки группы</b>\n\n"
+        f"{pe('games')} Игры: <b>{'включены' if g['games_on'] else 'выключены'}</b>\n"
+        f"{pe('tags')} Минимальная ставка: <b>{fg(g['min_stake'])} G</b>\n"
+        f"{pe('bolt')} Максимальная ставка: <b>{fg(g['max_stake']) if g['max_stake'] else 'без лимита'}</b>\n"
+        f"{pe('clock')} Пауза между играми: <b>{g['flood_sec']} с</b>\n\n"
+        f"{pe('crown')} Настройки меняет только админ группы."
     )
     cur = {k: g[k] for k in GSET_PRESETS}
     rows = [[btn("Игры: ВКЛ" if not g["games_on"] else "Игры: ВЫКЛ",
@@ -1770,7 +1770,7 @@ def group_settings_view(chat_id, g):
 @DP.message(Command("settings"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_group_settings(m: Message):
     if not await is_group_admin(m.from_user.id, m.chat.id):
-        await safe_reply(m, "Настройки доступны только админам группы")
+        await safe_reply(m, f"{pe('crown')} Настройки доступны только админам группы")
         return
     g = db.get_group(m.chat.id)
     text, markup = group_settings_view(m.chat.id, g)
@@ -1780,7 +1780,7 @@ async def cmd_group_settings(m: Message):
 @DP.message(Command("games_on"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_games_on(m: Message):
     if not await is_group_admin(m.from_user.id, m.chat.id):
-        await safe_reply(m, "Только админ группы")
+        await safe_reply(m, f"{pe('crown')} Это может сделать только админ группы")
         return
     db.set_group(m.chat.id, games_on=1)
     await safe_reply(m, f"{pe('party')} Игры в этой группе включены — за дело!")
@@ -1789,7 +1789,7 @@ async def cmd_games_on(m: Message):
 @DP.message(Command("games_off"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_games_off(m: Message):
     if not await is_group_admin(m.from_user.id, m.chat.id):
-        await safe_reply(m, "Только админ группы")
+        await safe_reply(m, f"{pe('crown')} Это может сделать только админ группы")
         return
     db.set_group(m.chat.id, games_on=0)
     await safe_reply(m, f"{pe('sad')} Игры в этой группе выключены")
@@ -2025,7 +2025,7 @@ async def text_cmd(m: Message):
             "Например: <b>Футбол 100</b> · <b>Слоты 1к</b> · <b>Кубы 100 малые</b>")
         return                          # «Футбол 0» больше не блокирует группу
     if cmd.get("need_side"):
-        await safe_reply(m, "Выбери сторону: <b>Кубы 100 малые</b> или <b>Кубы 100 большие</b>")
+        await safe_reply(m, f"{pe('cube')} Выбери сторону: <b>Кубы 100 малые</b> или <b>Кубы 100 большие</b>")
         return
     left = cd_check(f"u{uid}")
     if left:
@@ -2039,16 +2039,16 @@ async def text_cmd(m: Message):
     stake_amt = db.balance(uid) if stake == "all" else stake
     if g and stake_amt is not None:
         if stake_amt < g["min_stake"]:
-            await safe_reply(m, f"Мин. ставка в этой группе: <b>{fg(g['min_stake'])} G</b>")
+            await safe_reply(m, f"{pe('tags')} Минимальная ставка в этой группе: <b>{fg(g['min_stake'])} G</b>")
             return
         if g["max_stake"] and stake_amt > g["max_stake"]:
-            await safe_reply(m, f"Макс. ставка в этой группе: <b>{fg(g['max_stake'])} G</b>")
+            await safe_reply(m, f"{pe('tags')} Максимальная ставка в этой группе: <b>{fg(g['max_stake'])} G</b>")
             return
     if stake == "all":
         stake, err = charge_uid(uid, 0)             # 0 = весь баланс
     else:
         if stake <= 0:
-            await safe_reply(m, "Ставка должна быть больше нуля")
+            await safe_reply(m, f"{pe('warn')} Ставка должна быть больше нуля")
             return
         stake, err = charge_uid(uid, stake)
     if err:
@@ -2064,21 +2064,21 @@ async def text_cmd(m: Message):
 
 # ---------- приветствие при добавлении в группу ----------
 GROUP_HELLO_ADMIN = (
-    f"{pe('ball')} Готов играть в этой группе!\n\n"
-    "Просто напиши название игры и ставку — без команд и кавычек:\n"
-    "<b>Футбол 100</b> · <b>Баскетбол 100</b> · <b>Боулинг 100</b>\n"
-    "<b>Кубы 100 малые</b> · <b>Дартс 100</b> · <b>Слоты 100</b>\n\n"
-    "Ставка: число, «все» (весь баланс), «1к» = 1 000, «1кк» = 1 000 000\n\n"
-    "Ещё: Баланс · Профиль · Топ · Бонус · Задания · Магазин · Помощь"
+    f"{pe('party')} Я в деле — готов играть в этой группе!\n\n"
+    "Просто напиши название игры и ставку, без команд и кавычек:\n"
+    f"{pe('ball')} <b>Футбол 100</b> · <b>Баскетбол 100</b> · <b>Боулинг 100</b>\n"
+    f"{pe('cube')} <b>Кубы 100 малые</b> · <b>Дартс 100</b> · <b>Слоты 100</b>\n\n"
+    f"{pe('coin')} Ставка: число, «все» (весь баланс), «1к» = 1 000, «1кк» = 1 000 000\n\n"
+    f"{pe('wallet')} Ещё: Баланс · Профиль · Топ · Бонус · Задания · Магазин · Помощь"
 )
 GROUP_HELLO_NOT_ADMIN = (
-    f"{pe('ball')} Привет! Я тут, но пока НЕ вижу ваши сообщения — так устроен Telegram.\n\n"
-    "Как включить (10 секунд):\n"
+    f"{pe('wave')} Привет! Я уже тут, но пока не вижу ваши сообщения — так устроен Telegram.\n\n"
+    f"{pe('info')} Как включить (10 секунд):\n"
     "1. Нажми на название группы\n"
-    "2. Нажми на меня → «Назначить админом» → подтвердить\n"
-    "3. Напиши <b>Футбол 100</b> — и поехали!\n\n"
-    "Или глобально: @BotFather → /setprivacy → выбрать бота → Disable.\n\n"
-    "А пока есть два способа без админки:\n"
+    "2. Нажми на меня → «Назначить админом» → подтверди\n"
+    f"3. Напиши <b>Футбол 100</b> — и поехали!{pe('ball')}\n\n"
+    f"{pe('robot')} Или глобально: @BotFather → /setprivacy → выбрать бота → Disable.\n\n"
+    f"{pe('check')} А пока есть два способа без админки:\n"
     "• напиши <b>Футбол 100</b> ответом на это сообщение\n"
     "• или с упоминанием: <b>/футбол@{me} 100</b>"
 )
