@@ -56,6 +56,7 @@ PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files
 GAMES_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6fff4abbf_bdcd06513_IMG_20261023_132641_866.jpg"  # баннер «Игры»
 TOPUP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/10ba5c184_8d5d53a1c_IMG_20261023_153401_183.jpg"  # баннер «Пополнить»
 SHOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/33e9be752_ccab4d553_IMG_20261023_153353_579.jpg"  # баннер «Магазин»
+BONUS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/e2ce684be_bonus_banner.jpg"  # баннер «Бонусы»
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -905,22 +906,70 @@ async def cb_top(c: CallbackQuery):
     await c.answer()
 
 
+# ---------- v12.7: экран «Бонусы» с баннером ----------
+
+def hours_word(n):
+    """Час/часа/часов для склонения."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return "час"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "часа"
+    return "часов"
+
+
+def bonus_view(uid, just_claimed=False):
+    """Статус бонуса: готов к забору / только что забран / ожидание."""
+    u = db.get_user(uid)
+    if not u:
+        u = {"gold": 0, "last_bonus": 0}
+    left = BONUS_HOURS * 3600 - (int(time.time()) - (u["last_bonus"] or 0))
+    if just_claimed or left <= 0:
+        text = (f"{pe('gift')} <b>Бонус готов!</b>\n\n"
+                f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n\n"
+                f"<blockquote>Раз в {BONUS_HOURS} {hours_word(BONUS_HOURS)} забирай "
+                f"<b>+{BONUS_GOLD} {pe('coin')}</b> — "
+                "просто так, за то, что ты с нами.\n"
+                "Промокоды тоже дают Голду: пиши код прямо в чат — "
+                "один код один раз на человека.</blockquote>")
+        if just_claimed:
+            text = (f"{pe('party')} <b>Бонус получен: +{BONUS_GOLD} {pe('coin')}!</b>\n\n"
+                    f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
+                    f"Возвращайся через {BONUS_HOURS} ч.\n\n"
+                    "<blockquote>Ждём тебя снова — а пока Голда не "
+                    "пропадёт: загляни в кейсы или в дуэли.</blockquote>")
+            return text, kb([btn("Меню", "menu", icon="home")])
+        return text, kb(
+            [btn(f"Забрать +{BONUS_GOLD} G", "bonus:claim", icon="gift")],
+            [btn("Меню", "menu", icon="home")])
+    h, rem = divmod(left, 3600)
+    mn = rem // 60
+    text = (f"{pe('gift')} <b>Бонусы</b>\n\n"
+            f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
+            f"Следующий бонус: <b>через {h} ч{f' {mn} мин' if mn else ''}</b>\n\n"
+            f"<blockquote>Раз в {BONUS_HOURS} {hours_word(BONUS_HOURS)} — "
+            f"<b>+{BONUS_GOLD} {pe('coin')}</b> бесплатно. "
+            "Промокоды тоже дают Голду: пиши код прямо в чат.</blockquote>")
+    return text, kb([btn("Меню", "menu", icon="home")])
+
+
 @DP.callback_query(F.data == "bonus")
 async def cb_bonus(c: CallbackQuery):
+    await open_banner(c, BONUS_BANNER_URL, *bonus_view(c.from_user.id))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "bonus:claim")
+async def cb_bonus_claim(c: CallbackQuery):
     uid = c.from_user.id
-    u = db.get_user(uid)
     now = int(time.time())
-    if not db.claim_bonus(uid, now, BONUS_HOURS * 3600, BONUS_GOLD):
-        left = BONUS_HOURS * 3600 - (now - u["last_bonus"])
-        h, rem = divmod(left, 3600)
-        mn = rem // 60
-        await c.answer(f"Бонус будет доступен через {h} ч {mn} мин", show_alert=True)
-        return
-    await c.answer(f"+{BONUS_GOLD} голды! Возвращайся через {BONUS_HOURS} часов.", show_alert=True)
-    await show(c, 
-        f"{pe('wallet')} Баланс: <b>{fg(db.get_user(uid)['gold'])} {pe('coin')}</b>",
-        reply_markup=back_kb(),
-    )
+    if db.claim_bonus(uid, now, BONUS_HOURS * 3600, BONUS_GOLD):
+        await c.answer(f"+{BONUS_GOLD} голды! Возвращайся через {BONUS_HOURS} ч.",
+                       show_alert=True)
+        await show(c, *bonus_view(uid, just_claimed=True))
+    else:
+        await c.answer("Бонус уже забран — возвращайся позже", show_alert=True)
+        await show(c, *bonus_view(uid))
 
 
 # ---------- v12: уровни, кейсы, кланы, джекпот, витрина, дуэли ----------
@@ -1841,19 +1890,15 @@ async def cmd_balance(m: Message):
 async def cmd_bonus(m: Message):
     uid = m.from_user.id
     db.upsert_user(uid, m.from_user.username)
-    u = db.get_user(uid)
-    now = int(time.time())
-    if db.claim_bonus(uid, now, BONUS_HOURS * 3600, BONUS_GOLD):
-        await _open_screen(m,
-            f"{pe('party')} +{BONUS_GOLD} {pe('coin')}! Возвращайся через {BONUS_HOURS} ч.\n"
-            f"Баланс: <b>{fg(db.get_user(uid)['gold'])} {pe('coin')}</b>",
-            back_kb())
-    else:
-        left = BONUS_HOURS * 3600 - (now - u["last_bonus"])
-        h, rem = divmod(left, 3600)
-        await _open_screen(m,
-            f"{pe('clock')} Бонус будет доступен через {h} ч {rem // 60} мин",
-            back_kb())
+    ok = db.claim_bonus(uid, int(time.time()), BONUS_HOURS * 3600, BONUS_GOLD)
+    text, markup = bonus_view(uid, just_claimed=ok)
+    try:
+        await m.answer_photo(
+            BONUS_BANNER_URL,
+            caption=f"{pe('gift')} <b>Бонусы</b>\n\n{text}",
+            reply_markup=markup, parse_mode="HTML")
+    except TelegramAPIError:
+        await m.answer(text, reply_markup=markup, parse_mode="HTML")
 
 
 @DP.message(Command("plays"), F.chat.type == "private")
@@ -1904,7 +1949,9 @@ def reference_pack():
            "Ставки: 10 · 50 · 100 · 500 · 1000 · 5000 · «все». "
            "Множители — в карточке каждой игры (/plays → игра).",
            f"{pe('games')} Игры")
-        + "\n" + bq(f"Раз в {BONUS_HOURS} часа — бесплатная Голда: /bonus или кнопка меню.\n"
+        + "\n" + bq(f"Меню → <b>Бонус</b> (или /bonus): красивый экран покажет "
+           f"статус и кнопку «Забрать». Раз в {BONUS_HOURS} {hours_word(BONUS_HOURS)} — "
+           f"<b>+{BONUS_GOLD} Голды</b> бесплатно.\n"
            "Промокоды: напиши код (или «промокод КОД») — в личке или в любой группе. "
            "Один код — одно активирование на человека.",
            f"{pe('gift')} Бонус и промокоды")
