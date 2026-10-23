@@ -2691,13 +2691,36 @@ _seen = {}      # (chat_id, message_id) -> ts: одно сообщение = о�
 
 
 
+async def notify_admins(text):
+    """v12.20: служебные уведомления владельцам бота (ADMIN_IDS) в ЛС.
+    События: подключение/отключение групп, прочие системные события."""
+    for uid in sorted(ADMIN_IDS):
+        try:
+            await BOT.send_message(uid, text, parse_mode="HTML")
+        except TelegramAPIError:
+            pass                       # админ не запускал бота в ЛС — не падаем
+
+
+def _who_added(u):
+    who = u.from_user
+    if not who:
+        return "неизвестно"
+    if who.username:
+        return f"@{who.username}"
+    full = (who.first_name or "").strip()
+    return f"{html.escape(full)} (ID {who.id})" if full else f"ID {who.id}"
+
+
 @DP.my_chat_member()
 async def on_my_chat_member(u: ChatMemberUpdated):
     """Добавление/удаление бота в ЛЮБОЙ группе, без настройки на каждую.
-    Каналы игнорируем. Голда у юзера общая на все группы."""
+    Каналы игнорируем. Голда у юзера общая на все группы.
+    v12.20: о каждом подключении/отключении группы приходить
+    уведомление владельцам в ЛС — видно, кто и куда подключает бота."""
     if u.chat.type not in ("group", "supergroup"):
         return
     st = u.new_chat_member.status
+    title = html.escape(u.chat.title or "без названия")
     if st in ("member", "administrator", "restricted"):
         db.upsert_group(u.chat.id, u.chat.title or "",
                         u.from_user.id if u.from_user else 0)
@@ -2708,8 +2731,19 @@ async def on_my_chat_member(u: ChatMemberUpdated):
                 else GROUP_HELLO_NOT_ADMIN.format(me=ME))
         except TelegramAPIError:
             pass                       # бот не может писать — не падаем
+        await notify_admins(
+            f"{pe('people')} <b>Бот подключён к группе</b>\n\n"
+            f"{pe('right')} Группа: <b>{title}</b>\n"
+            f"ID: <code>{u.chat.id}</code>\n"
+            f"Добавил: {_who_added(u)}\n"
+            f"{pe('crown')} Права бота: "
+            f"{'администратор' if st == 'administrator' else 'участник'}")
     elif st in ("left", "kicked"):
         db.deactivate_group(u.chat.id)
+        await notify_admins(
+            f"{pe('cross')} <b>Бот удалён из группы</b>\n\n"
+            f"{pe('right')} Группа: <b>{title}</b>\n"
+            f"ID: <code>{u.chat.id}</code>")
 
 
 # ---------- настройки группы (только админ группы) ----------
@@ -3089,8 +3123,15 @@ async def on_added(m: Message):
     if not m.new_chat_members or not any(u.is_bot and u.id == BOT.id for u in m.new_chat_members):
         return
     if m.chat.type in ("group", "supergroup"):
+        known = db.get_group(m.chat.id) is not None
         db.upsert_group(m.chat.id, m.chat.title or "",
                         m.from_user.id if m.from_user else 0)
+        if not known:
+            await notify_admins(
+                f"{pe('people')} <b>Бот в новой группе</b> (авто-регистрация)\n\n"
+                f"{pe('right')} Группа: <b>{html.escape(m.chat.title or 'без названия')}</b>\n"
+                f"ID: <code>{m.chat.id}</code>\n"
+                f"Добавил: {_who_added(m)}")
 
 
 if __name__ == "__main__":
