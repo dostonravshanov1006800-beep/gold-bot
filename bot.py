@@ -2182,12 +2182,15 @@ def git_sync_loop():
 # ---------- запуск ----------
 
 async def polling_watchdog():
-    """v12.8: сторож слуха бота. 1) На этом боте polling — чужой вебхук
-    (инцидент 23.10: вебхук gold-bandito случайно встал на @funapp_game,
-    Telegram запретил getUpdates, бот оглох при живом heartbeat) сносим
-    сразу. 2) getUpdates(timeout=0) изнутри обязан получить 409-конфликт
-    с собственным поллером; два ответа подряд без конфликта = поллер
-    мёртв — перезапускаем процесс (workflow поднимет бота через 10с)."""
+    """v12.12: зонд getUpdates УДАЛЁН — он принципиально не работал:
+    новый getUpdates НЕ получает 409, а терминирует ожидающий запрос
+    ПОЛЛЕРА (409 достаётся поллеру). Доказано логами 23.10: 12 апдейтов
+    обработано, сторож вынес «поллер мёртв» и убил живого бота (4 раза
+    подряд). Живость поллера гарантирует сам aiogram: падение polling
+    возвращает start_polling -> os._exit(1) -> супервизор перезапускает.
+    Обязанности сторожа: 1) сносить чужой вебхук (реальный вектор
+    глухоты, инцидент с gold-bandito); 2) poll_ok каждый цикл;
+    3) upd_seen пишет middleware — подлинный маркер слуха."""
     wi = await BOT.get_webhook_info()
     if wi.url:
         await BOT.delete_webhook(drop_pending_updates=False)
@@ -2199,27 +2202,24 @@ async def polling_watchdog():
                 "polling восстановлен.")
         except Exception:
             pass
-    # v12.11: уронил 23.10 в 20:52 — два зонда с паузой 0.2с попадали
-    # в 11-секундную щель реконнекта aiogram при передаче эстафеты между
-    # ранами, и сторож убил ЖИВОЙ процесс. Теперь: 3 зонда с паузой 30с
-    # (щель реконнекта не живёт дольше пары секунд); 409 на любом зонде =
-    # поллер жив, выходим сразу.
-    for i in range(3):
-        conflict = False
+    db.put_meta("poll_ok", str(int(time.time())))
+
+
+_upd_ts = 0.0
+
+async def _mark_update_seen(handler, event, data):
+    """Middleware на update: пишет upd_seen не чаще 1 раза в минуту —
+    подлинное доказательство, что бот СЛЫШИТ (не чаще — не грузим базу)."""
+    global _upd_ts
+    t = time.time()
+    if t - _upd_ts > 60:
+        _upd_ts = t
         try:
-            await BOT.get_updates(timeout=0)   # успех = конфликта нет
-        except TelegramAPIError:               # 409: конфликт с живым поллером
-            conflict = True
-            db.put_meta("poll_ok", str(int(time.time())))
-            return
-        if i < 2:
-            await asyncio.sleep(30)
-    db.put_meta("poll_dead", str(int(time.time())))
-    logging.critical("polling мёртв (3 зонда по 30с без конфликта) — перезапуск")
-    # поллер мёртв, спешить некуда: даём git-синхрону 50с закоммитить
-    # poll_dead в репо (иначе после смерти метка терялась), потом рестарт
-    await asyncio.sleep(50)
-    os._exit(1)
+            db.put_meta("upd_seen", str(int(t)))
+        except Exception:
+            pass
+    return await handler(event, data)
+
 
 async def main():
     global ME
@@ -2286,6 +2286,7 @@ async def main():
             except Exception as e:
                 logging.warning("heartbeat watchdog: %s", e)
             await asyncio.sleep(240)
+    DP.update.outer_middleware(_mark_update_seen)   # v12.12: маркер слуха
     asyncio.create_task(heartbeat())
     asyncio.create_task(jackpot_draw_loop())
     asyncio.create_task(clan_war_loop())
