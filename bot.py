@@ -286,6 +286,24 @@ async def show(c: CallbackQuery, text, reply_markup=None):
 
 @DP.message(CommandStart())
 async def cmd_start(m: Message, command: CommandStart):
+    # v12.3: в группах /start — только информация, без регистрации и
+    # стартовой Голды. Функционал — после запуска бота в личке.
+    if m.chat.type in ("group", "supergroup"):
+        try:
+            await m.reply(
+                f"{pe('info')} <b>Все функции — в личке бота.</b>\n\n"
+                "Открой <b>@" + ME + " → /start</b> — там стартовая Голда, "
+                "игры, кейсы, кланы и джекпот.\n"
+                "В группах бот понимает только текстовые команды "
+                "(<b>футбол 100</b>, <b>джекпот</b>…) и только тех, "
+                "кто уже запустил его в личке.",
+                parse_mode="HTML",
+                reply_markup=kb([btn("Открыть бота", "sub",
+                                     url="https://t.me/" + ME,
+                                     icon="app")]))
+        except TelegramAPIError:
+            pass
+        return
     # реферал действует ТОЛЬКО для новых юзеров: существующий в базе не может
     # быть «приглашён» повторным переходом по ссылке
     is_new = not db.get_user(m.from_user.id)
@@ -1157,6 +1175,10 @@ async def try_duel(m: Message):
                                 "— пусть сначала запустит бота")
             return True
         target = row["id"]
+    if target is not None and not db.get_user(target):
+        await safe_reply(m, f"{pe('warn')} Соперник ещё не запустил бота — "
+                            "пусть откроет @" + ME + " в личке")
+        return True
     if target is None:
         await safe_reply(m,
             f"{pe('warn')} Кому вызов? Ответь (reply) на сообщение соперника: "
@@ -1713,7 +1735,7 @@ def reference_pack():
            "В профиле — баланс, друзья и личная ссылка.",
            f"{pe('wallet')} Баланс и профиль")
         + "\n" + bq("Футбол · Баскетбол · Боулинг · Кубы · Дартс · Слоты.\n"
-           "В группах — текстом: «Футбол 100», «Слоты 500», «Кубы 100 малые». "
+           "В группах — текстом (после /start в личке): «Футбол 100», «Слоты 500», «Кубы 100 малые». "
            "Ставки: 10 · 50 · 100 · 500 · 1000 · 5000 · «все». "
            "Множители — в карточке каждой игры (/plays → игра).",
            f"{pe('games')} Игры")
@@ -2449,6 +2471,21 @@ async def text_cmd(m: Message):
         if maybe != "ВСЕ" and db.one(
                 "SELECT 1 FROM promos WHERE code=? AND active=1", (maybe,)):
             pcode = words[0]
+    # v12.3: в группах бот отвечает только подписчикам (запуск /start в
+    # личке). Новичок, пишущий команду, получает подсказку с кнопкой подписки.
+    if (m.chat.type in ("group", "supergroup")
+            and not db.get_user(m.from_user.id)
+            and (pcode or DUEL_RE.match(m.text or "")
+                 or parse_group_cmd(m.text)
+                 or parse_tx_amount(m.text or ""))):
+        await m.reply(
+            f"{pe('info')} Чтобы играть в группах, сначала запусти бота "
+            "в личке: <b>@" + ME + " → /start</b> — стартовая Голда ждёт там.",
+            parse_mode="HTML",
+            reply_markup=kb([btn("Подписаться", "sub",
+                                 url="https://t.me/" + ME,
+                                 icon="app")]))
+        return
     # похоже на перевод, но получателя нет (reply на бота/себя или без reply)
     if (m.chat.type in ("group", "supergroup")
             and not pcode and parse_tx_amount(m.text or "")):
