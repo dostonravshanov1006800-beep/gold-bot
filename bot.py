@@ -802,7 +802,8 @@ def profile_payload(uid, u=None):
     return (
         f"{pe('wallet')} <b>Профиль</b>\n\n"
         f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
-        f"{pe('up')} Уровень: <b>{u['level'] or 0}{f' из {len(db.LEVEL_COSTS)}' if (u['level'] or 0) < len(db.LEVEL_COSTS) else ' · максимум'}</b>\n"
+        f"{pe('up')} Уровень: <b>{u['level'] or 0} из {db.LEVEL_MAX}"
+        f"{' · максимум' if (u['level'] or 0) >= db.LEVEL_MAX else ''}</b>\n"
         f"{pe('people')} Приглашено друзей: <b>{n}</b>\n\n"
         f"{pe('people')} Твоя ссылка для друзей:\n"
         f"<code>https://t.me/{ME}?start=ref_{uid}</code>\n\n"
@@ -953,38 +954,35 @@ async def cb_level(c: CallbackQuery):
     uid = c.from_user.id
     u = db.get_user(uid)
     lv = u["level"] or 0
-    if lv >= len(db.LEVEL_COSTS):
+    owned = len(db.user_cosmetics(uid))
+    if lv >= db.LEVEL_MAX:
         await show(c,
             f"{pe('crown')} <b>Уровень {lv} — максимум</b>\n\n"
-            "Твой профиль на вершине. Дальше — только легенды.",
+            "Ты сжёг больше Голды, чем кто-либо. Дальше — только легенды.",
             reply_markup=kb([btn("Профиль", "profile", icon="wallet")]))
         await c.answer()
         return
-    cost = db.LEVEL_COSTS[lv]
-    owned = len(db.user_cosmetics(uid))
+    need = db.LEVEL_BURN[lv]                 # порог следующего уровня
+    left = max(need - int(u["spent"] or 0), 0)
     await show(c,
         f"{pe('up')} <b>Уровень {lv} → {lv + 1}</b>\n\n"
-        f"Апгрейд стоит <b>{fg(cost)} {pe('coin')}</b> и сгорает навсегда. "
-        "Уровень — это престиж: он виден в профиле и в Витрине богатства.\n\n"
+        f"Уровень растёт сам — от сожжённой Голды.\n"
+        f"Сожжено: <b>{fg(u['spent'] or 0)} {pe('coin')}</b> · "
+        f"до {lv + 1}-го осталось <b>{fg(left)} {pe('coin')}</b>\n\n"
+        "<blockquote>Голда сгорает в кейсах, кланах, магазине и обмене "
+        "на Stars — каждый сожжённый G приближает уровень.</blockquote>\n\n"
         f"{pe('gem')} Косметики собрано: <b>{owned}</b>",
         reply_markup=kb(
-            [btn(f"Улучшить · {fg(cost)} G", "lvl:up", icon="up")],
+            [btn("Кейс · сжечь 500 G", "case", icon="present")],
             [btn("Профиль", "profile", icon="wallet")]))
     await c.answer()
 
 
 @DP.callback_query(F.data == "lvl:up")
 async def cb_level_up(c: CallbackQuery):
-    uid = c.from_user.id
-    ok, lv, cost = db.upgrade_level(uid)
-    if not ok:
-        if lv >= len(db.LEVEL_COSTS):
-            await c.answer("Уровень уже максимальный", show_alert=True)
-            return
-        await c.answer(f"Не хватает Голды: нужно {fg(cost)}", show_alert=True)
-        return
-    await c.answer(f"Уровень {lv}! {fg(cost)} G сгорели в славе", show_alert=True)
-    await _profile_banner(c)     # свежий профиль с новым уровнем
+    """v12.5: кнопки покупки больше нет — старые экраны честно отвечают."""
+    await c.answer("Уровень теперь растёт от сожжённой Голды — жги её "
+                   "в кейсах, кланах и магазине!", show_alert=True)
 
 
 def case_view(uid):
@@ -1089,8 +1087,8 @@ async def cb_clan_new(c: CallbackQuery):
     if lv < 10:                     # v12.4: создание клана — с 10-го уровня
         await show(c,
             f"{pe('crown')} <b>Создание клана — с 10-го уровня</b>\n\n"
-            f"Твой уровень: <b>{lv}</b>. Апгрейд — Профиль → Уровень: "
-            "каждая ступень сжигает Голду и остаётся навсегда. "
+            f"Твой уровень: <b>{lv}</b>. Уровень растёт сам — от сожжённой "
+            "Голды: жги её в кейсах и магазине. "
             "10-й уровень открывает создание клана.",
             reply_markup=kb([btn("К уровням", "profile", icon="up")],
                             [btn("Клан", "clan", icon="people")]))
@@ -1846,9 +1844,10 @@ def reference_pack():
            f"{pe('bolt')} Дуэли")
         + "\n" + bq("Меню → <b>Кейс</b>: за 500 Голды — рамки для топа, цвета "
            "имени и легендарный титул. Дубликат возвращает 100 G.\n"
-           "Профиль → <b>Уровень</b>: 10 ступеней — 100 → 500 → 2 000 → 10 000 → "
-           "50 000 → 150к → 400к → 1М → 2,5М → 6М G. "
-           "Голда сгорает, уровень остаётся навсегда — 10-й открывает клан.",
+           "Профиль → <b>Уровень</b>: 100 ступеней — растут сами от сожжённой "
+           "Голды. Порог уровня N = 100×N²: 1-й — 100 G, 10-й — 10к, "
+           "50-й — 250к, 100-й — 1М.\n"
+           "Голда сгорает в кейсах, кланах, магазине и обмене на Stars.",
            f"{pe('present')} Кейсы и уровни")
         + "\n" + bq("Меню → <b>Клан</b>: создать за 1000 G — с 10-го уровня, "
            "принимается только ссылка на группу клана (t.me/...); "

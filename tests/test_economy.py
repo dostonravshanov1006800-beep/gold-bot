@@ -47,22 +47,29 @@ def test_burn_gold_tracks_spent(fresh_db):
 
 # ---------- уровни ----------
 
-def test_level_upgrade_costs_and_max(fresh_db):
-    uid = mkuser(fresh_db, 1, gold=500)
-    ok, lv, cost = fresh_db.upgrade_level(uid)
-    assert ok and lv == 1 and cost == 100                # 100 → 500 → 2000 → ...
-    assert fresh_db.get_user(uid)["gold"] == 400
-    assert fresh_db.get_user(uid)["spent"] == 100
-    ok, lv, cost = fresh_db.upgrade_level(uid)           # нужно 500, есть 400
-    assert not ok and cost == 500
-    assert fresh_db.get_user(uid)["level"] == 1
+def test_level_from_burn_curve(fresh_db):
+    """v12.5: уровень = f(сожжённой Голды), порог N = 100xN^2, до 100-го."""
+    assert fresh_db.LEVEL_MAX == 100 and len(fresh_db.LEVEL_BURN) == 100
+    assert fresh_db.LEVEL_BURN[0] == 100            # 1-й: 100 G
+    assert fresh_db.LEVEL_BURN[9] == 10_000         # 10-й: 10к G
+    assert fresh_db.LEVEL_BURN[49] == 250_000       # 50-й: 250к G
+    assert fresh_db.LEVEL_BURN[99] == 1_000_000     # 100-й: 1М G
 
-    rich = mkuser(fresh_db, 2, gold=10**9)
-    for _ in range(len(fresh_db.LEVEL_COSTS)):
-        ok, lv, _ = fresh_db.upgrade_level(rich)
-        assert ok
-    ok, lv, _ = fresh_db.upgrade_level(rich)            # максимум
-    assert not ok and lv == len(fresh_db.LEVEL_COSTS)
+    f = fresh_db.level_from_spent
+    assert f(0) == 0 and f(99) == 0 and f(100) == 1
+    assert f(9_999) == 9 and f(10_000) == 10        # гейт клана
+    assert f(250_000) == 50 and f(1_000_000) == 100
+    assert f(999_999_999) == 100                    # выше 100 не бывает
+
+    # сжигание само поднимает уровень: 100 → ур.1, ещё 900 (итого 1000) → ур.3
+    uid = mkuser(fresh_db, 1, gold=2500)
+    assert fresh_db.burn_gold(uid, 100, "case")
+    assert fresh_db.get_user(uid)["level"] == 1
+    assert fresh_db.burn_gold(uid, 900, "shop")
+    assert fresh_db.get_user(uid)["level"] == 3
+    assert fresh_db.burn_gold(uid, 1500, "clan")
+    assert fresh_db.get_user(uid)["level"] == 5
+    assert fresh_db.get_user(uid)["spent"] == 2500
 
 
 # ---------- кейсы ----------
@@ -128,7 +135,8 @@ def test_jackpot_pool_and_active_players(fresh_db):
 # ---------- кланы ----------
 
 def lvl10(fresh_db, uid):
-    fresh_db.ex("UPDATE users SET level=10 WHERE id=?", (uid,))
+    """Уровень 10 = 10к сожжённой Голды (v12.5: level выводится из spent)."""
+    fresh_db.ex("UPDATE users SET spent=10000, level=10 WHERE id=?", (uid,))
 
 
 def test_clans_create_join_war(fresh_db):
@@ -174,7 +182,8 @@ def test_clan_name_conflict_refunds(fresh_db):
     assert fresh_db.clan_create(a, "Алмазы", "t.me/diamonds") is None
     assert "уже есть" in fresh_db.clan_create(b, "Алмазы", "t.me/diamonds2")
     assert fresh_db.get_user(b)["gold"] == 5000          # голда вернулась
-    assert fresh_db.get_user(b)["spent"] == 0
+    assert fresh_db.get_user(b)["spent"] == 10000         # только взнос откатился
+    assert fresh_db.get_user(b)["level"] == 10            # уровень не потерян
 
 
 # ---------- лимит-товары и сезонные коллекции ----------
@@ -257,23 +266,24 @@ def test_duel_regex_parses_forms():
 
 def test_clan_requires_level10(fresh_db):
     a = mkuser(fresh_db, 9, gold=5000)
+    fresh_db.ex("UPDATE users SET spent=8100 WHERE id=?", (a,))   # ур. 9
+    fresh_db.relevel(a)
+    assert fresh_db.get_user(a)["level"] == 9
     err = fresh_db.clan_create(a, "Рано", "t.me/early")
     assert err and "10-го уровня" in err
     assert fresh_db.get_user(a)["gold"] == 5000      # ничего не списано
-    fresh_db.ex("UPDATE users SET level=10 WHERE id=?", (a,))
+    fresh_db.ex("UPDATE users SET spent=10000 WHERE id=?", (a,))  # ур. 10
+    fresh_db.relevel(a)
+    assert fresh_db.get_user(a)["level"] == 10
     assert fresh_db.clan_create(a, "Рано", "t.me/early") is None
 
 
 def test_clan_level10_of_ladder(fresh_db):
-    """Лестница уровней — 10 ступеней, 10-й достижим и открывает клан."""
-    assert len(fresh_db.LEVEL_COSTS) == 10
-    a = mkuser(fresh_db, 11, gold=sum(fresh_db.LEVEL_COSTS) + 1000)
-    for _ in range(10):
-        ok, lv, _ = fresh_db.upgrade_level(a)
-        assert ok
+    """10-й уровень достижим сжиганием 10к G и открывает клан."""
+    a = mkuser(fresh_db, 11, gold=11_000)
+    assert fresh_db.burn_gold(a, 10_000, "shop")       # сжёг — уровень вырос сам
     assert fresh_db.get_user(a)["level"] == 10
-    ok, lv, cost = fresh_db.upgrade_level(a)           # выше нет
-    assert not ok and lv == 10 and cost == 0
+    assert fresh_db.get_user(a)["gold"] == 1_000
     assert fresh_db.clan_create(a, "Вершина", "t.me/topclan") is None
 
 

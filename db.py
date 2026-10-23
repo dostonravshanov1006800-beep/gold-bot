@@ -212,6 +212,10 @@ def init():
         except sqlite3.OperationalError:
             pass
     _conn.executescript(SCHEMA_ECON)
+    # v12.5: одноразовый пересчёт уровней из сожжённой Голды для старой базы
+    for r in q("SELECT id, spent FROM users"):
+        lv = level_from_spent(r["spent"])
+        ex("UPDATE users SET level=? WHERE id=?", (lv, r["id"]))
     _conn.commit()
 
 
@@ -458,6 +462,7 @@ def burn_gold(uid, amount, kind):
     cur = ex("UPDATE users SET gold = gold - ?, spent = spent + ? "
              "WHERE id = ? AND gold >= ?", (amount, amount, uid, amount))
     if cur.rowcount == 1:
+        relevel(uid)                      # v12.5: уровень растёт от сожжения
         log_econ(uid, -amount, kind)
         return True
     return False
@@ -470,26 +475,31 @@ def top_spent(limit=10):
 # --- уровни (косметика и престиж, не голда) ---
 
 # v12.4: лестница до 10 ступеней — 10-й уровень открывает создание клана
-LEVEL_COSTS = [100, 500, 2000, 10000, 50000,
-               150000, 400000, 1000000, 2500000, 6000000]
+# v12.5: уровни считаются ПО СОЖЖЁННОЙ Голде (users.spent), до 100-го.
+# Порог уровня N: сожжено 100 x N^2 Голды — 1-й: 100, 10-й: 10к,
+# 50-й: 250к, 100-й: 1М. Растут автоматически при каждом сожжении.
+LEVEL_BURN = [100 * n * n for n in range(1, 101)]
+LEVEL_MAX = 100
 
-def upgrade_level(uid):
-    """Атомарный апгрейд: списание cost + level+1 одним UPDATE.
-    Возвращает (ok, new_level, cost)."""
-    u = get_user(uid)
+def level_from_spent(spent):
+    """Уровень по суммарно сожжённой Голде: наибольший N с порогом <= spent."""
+    spent = int(spent or 0)
+    lv = 0
+    for i, th in enumerate(LEVEL_BURN):
+        if spent >= th:
+            lv = i + 1
+        else:
+            break
+    return lv
+
+def relevel(uid):
+    """Пересчёт уровня из spent — после сожжения или возврата."""
+    u = one("SELECT spent, level FROM users WHERE id=?", (uid,))
     if not u:
-        return False, 0, 0
-    lv = u["level"] or 0
-    if lv >= len(LEVEL_COSTS):
-        return False, lv, 0
-    cost = LEVEL_COSTS[lv]
-    cur = ex("UPDATE users SET gold = gold - ?, spent = spent + ?, level = level + 1 "
-             "WHERE id = ? AND gold >= ? AND level = ?",
-             (cost, cost, uid, cost, lv))
-    if cur.rowcount == 1:
-        log_econ(uid, -cost, "level")
-        return True, lv + 1, cost
-    return False, lv, cost
+        return
+    lv = level_from_spent(u["spent"])
+    if lv != (u["level"] or 0):
+        ex("UPDATE users SET level=? WHERE id=?", (lv, uid))
 
 # --- кейсы (голда сгорает, дубликат возвращает лишь пятую часть) ---
 
@@ -642,6 +652,7 @@ def clan_create(uid, name, link=None):
     except sqlite3.IntegrityError:
         ex("UPDATE users SET spent = spent - ? WHERE id=?",
            (CLAN_CREATE_COST, uid))          # откат витрины тоже
+        relevel(uid)                          # v12.5: уровень тоже откатывается
         add_gold(uid, CLAN_CREATE_COST, "clan_refund")
         return "Клан с таким именем уже есть"
     ex("INSERT OR REPLACE INTO clan_members(user_id, clan_id, joined) VALUES(?,?,?)",
