@@ -1975,6 +1975,16 @@ async def text_cmd(m: Message):
         if maybe != "ВСЕ" and db.one(
                 "SELECT 1 FROM promos WHERE code=? AND active=1", (maybe,)):
             pcode = words[0]
+    # похоже на перевод, но получателя нет (reply на бота/себя или без reply)
+    if (m.chat.type in ("group", "supergroup")
+            and not pcode and parse_tx_amount(m.text or "")):
+        src = m.reply_to_message.from_user if m.reply_to_message else None
+        if not src or src.is_bot or src.id == m.from_user.id:
+            msg = await m.reply(
+                f"{pe('warn')} Для перевода ответь (reply) на сообщение получателя "
+                "и напиши сумму: например <b>500к</b>")
+            await _tx_auto_delete(msg)
+            return
     if pcode:
         db.upsert_user(m.from_user.id, m.from_user.username)
         status, amount = db.redeem_promo(pcode, m.from_user.id)
