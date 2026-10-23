@@ -1218,6 +1218,9 @@ async def exch_amount_input(m: Message):
     ts = EXCH_AWAIT.get(m.from_user.id)
     if not ts or time.time() - ts > 600:
         raise SkipHandler
+    if (m.text or "").startswith("/"):
+        EXCH_AWAIT.pop(m.from_user.id, None)      # v12.9: команда важнее ввода
+        raise SkipHandler
     raw = (m.text or "").strip().split()[0] if (m.text or "").strip() else ""
     try:
         stars = int(raw)
@@ -1254,6 +1257,9 @@ async def clan_name_input(m: Message):
     Вне контекста — SkipHandler."""
     ts = CLAN_NAME_AWAIT.get(m.from_user.id)
     if not ts or time.time() - ts > 600:
+        raise SkipHandler
+    if (m.text or "").startswith("/"):
+        CLAN_NAME_AWAIT.pop(m.from_user.id, None)  # v12.9: команда важнее ввода
         raise SkipHandler
     link, name = parse_group_link(m.text)
     if not link:

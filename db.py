@@ -221,6 +221,16 @@ def init():
     for r in q("SELECT id, spent FROM users"):
         lv = level_from_spent(r["spent"])
         ex("UPDATE users SET level=? WHERE id=?", (lv, r["id"]))
+    # v12.9: одноразовая чистка мусорных кланов из старого флоу тестирования
+    # (клан «/admin»: имя со слэшем и ноль участников). Владельцу возвращаем
+    # потраченные на создание 1000 G — клан сгорел по нашей вине, не его.
+    junk = q("SELECT id, owner FROM clans WHERE name LIKE '/%' "
+             "AND id NOT IN (SELECT DISTINCT clan_id FROM clan_members)")
+    for r in junk:
+        ex("DELETE FROM clans WHERE id=?", (r["id"],))
+        if r["owner"]:
+            ex("UPDATE users SET gold = gold + ? WHERE id=?",
+               (CLAN_CREATE_COST, r["owner"]))
     _conn.commit()
 
 
