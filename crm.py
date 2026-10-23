@@ -375,11 +375,13 @@ def setup(ctx):
                     f"#{e['id']} · {un} · {fg(e['gold'])} G → {e['stars']} Stars")
         else:
             lines.append("Заявок нет.")
-        rows = [[btn("Изменить курс", "exch:rate", "edit"),
-                 btn("Создать заявку", "exch:add", "plus")]]
+        # v12.17: у кнопок не было префикса "a:" — обработчик CRM ловит
+        # только "a:...", кнопки «мертво» молчали (курс не менялся)
+        rows = [[btn("Изменить курс", "a:exch:rate", "edit"),
+                 btn("Создать заявку", "a:exch:add", "plus")]]
         for e in pend:
-            rows.append([btn(f"#{e['id']} выдать Stars", f"exch:done:{e['id']}", "check"),
-                         btn(f"#{e['id']} отклонить", f"exch:dec:{e['id']}", "cross")])
+            rows.append([btn(f"#{e['id']} выдать Stars", f"a:exch:done:{e['id']}", "check"),
+                         btn(f"#{e['id']} отклонить", f"a:exch:dec:{e['id']}", "cross")])
         return "\n".join(lines), kb(*rows, *nav("exch"))
 
     SCREENS = {

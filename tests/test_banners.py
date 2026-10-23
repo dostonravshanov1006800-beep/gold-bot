@@ -30,23 +30,16 @@ class FakeCb:
     async def answer(self, text=None, **k): self.answers.append(text)
 
 def test_refguide_shows_banner_then_pack():
-    """Кнопка «Справочник»: баннер, затем полный справочник, старое удаляется."""
+    """v12.17: кнопка «Справочник» — баннер с подписью-справочником
+    внутри (раньше текст шёл отдельным сообщением)."""
     c = FakeCb()
     asyncio.run(b.cb_refguide(c))
-    kinds = [s[0] for s in c.message.sent]
-    assert kinds[0] == "photo", "первым должен идти баннер"
-    assert c.message.sent[0][1][0] == b.REF_BANNER_URL, "не тот баннер"
-    assert "photo" not in kinds[1:], "фото должно быть одно"
-    texts = [s[1] for s in c.message.sent if s[0] == "text"]
-    assert texts and "Справочник" in texts[0], "справочник должен уйти следом"
-    assert "delete" in kinds, "старый экран должен удалиться"
-
-def test_help_command_shows_banner_first():
-    """/help: баннер справочника, затем текст справочника."""
-    m = FakeMsg()
-    asyncio.run(b.cmd_help(m))
-    assert m.sent[0][0] == "photo" and m.sent[0][1][0] == b.REF_BANNER_URL
-    assert m.sent[1][0] == "text" and "Справочник" in m.sent[1][1]
+    assert c.message.sent[0][0] == "photo"
+    assert c.message.sent[0][1][0] == b.REF_BANNER_URL
+    cap = c.message.sent[0][1][1]
+    assert cap and "Справочник" in cap
+    assert not [s for s in c.message.sent if s[0] == "text"], \
+        "отдельного текстового сообщения быть не должно"
 
 def test_plays_command_shows_games_banner():
     """/plays: баннер «Игры» с подписью-экраном."""
@@ -154,8 +147,9 @@ def test_commands_swap_screens():
         b.BOT = real_bot
         b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
 
-def test_help_swaps_and_tracks_two_messages():
-    """v12.15: /help = баннер + текст, оба помнятся, старые удаляются."""
+def test_help_swaps_single_bubble():
+    """v12.17: /help = ОДНО сообщение (баннер + подпись-справочник),
+    старый экран удаляется."""
     m = SwapMsg()
     api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
     try:
@@ -163,7 +157,7 @@ def test_help_swaps_and_tracks_two_messages():
         asyncio.run(b.cmd_help(m))
         assert (777, 999) in api.deleted
         v = b.db.get_meta("screen:777")
-        assert v.count(",") == 1, f"баннер+текст = два id: {v}"
+        assert v and "," not in v, f"один пузырь = один id: {v}"
     finally:
         b.BOT = real_bot
         b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
@@ -195,3 +189,21 @@ def test_exch_screen_uses_exch_banner():
     asyncio.run(b.cb_exch(c))
     assert c.message.sent[0][0] == "photo"
     assert c.message.sent[0][1][0] == b.EXCH_BANNER_URL
+
+def test_refguide_caption_inside_photo():
+    """v12.17: справочник — подпись ВНУТРИ баннера, один пузырь,
+    отдельного текстового сообщения нет (скрин 23:24)."""
+    c = FakeCb()
+    asyncio.run(b.cb_refguide(c))
+    kinds = [s[0] for s in c.message.sent]
+    assert "text" not in kinds, f"отдельного текста нет: {kinds}"
+    assert kinds.count("photo") == 1, f"одно фото-сообщение: {kinds}"
+    cap = c.message.sent[0][1][1]
+    assert "Справочник" in cap and "Игры" in cap
+
+def test_reference_caption_fits_telegram_limit():
+    """Подпись справочника <= 1024 видимых знаков (лимит Telegram)."""
+    import re
+    vis = re.sub(r"<[^>]+>", "", b.reference_caption())
+    assert len(vis) <= 1024, f"подпись {len(vis)} знаков — Telegram отклонит"
+    assert "Джекпот" in vis and "Клан" in vis and "Обмен" in vis

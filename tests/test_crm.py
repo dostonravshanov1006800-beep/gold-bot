@@ -247,3 +247,41 @@ def test_users_list_single_buttons(m):
     run(cb(CB(1, "a:users", msg)))
     assert any("Нажми на юзера" in x for x in msg.out)
     assert not any("Начислить @" in x for x in msg.out)  # кнопки не режут имена
+
+
+def test_exch_rate_change_end_to_end(m):
+    """v12.17: баг со скрина 23:22 — кнопки обмена не имели префикса a:.
+    Теперь: «Изменить курс» → ввод числа → курс обновился, панель
+    перерисовалась, state очищен."""
+    sent = Sent(); fake_bot(m, sent)
+    cb, txt = handler(m, "cb_crm"), handler(m, "crm_text")
+    old_rate = m.db.stars_rate()
+    run(cb(CB(1, "a:exch:rate", Msg(1))))
+    run(txt(Msg(1, "15000")))
+    assert m.db.stars_rate() == 15000
+    assert any(e[0] == "edit" and "1 Star = 15 000" in e[2] for e in sent)
+    m.db.set_stars_rate(old_rate)
+
+def test_exch_done_via_prefixed_button(m):
+    """v12.17: выдать Stars по кнопке с префиксом a: — юзер получает
+    уведомление, заявка закрывается."""
+    m.db.add_gold(2, 10**9)
+    sent = Sent(); fake_bot(m, sent)
+    cb = handler(m, "cb_crm")
+    ok, gold, _ = m.db.create_exchange(2, 5)
+    assert ok
+    e = m.db.pending_exchanges()[-1]
+    run(cb(CB(1, f"a:exch:done:{e['id']}", Msg(1))))
+    assert any(x[0] == "send" and x[1] == 2 and "Stars" in x[2] for x in sent)
+    assert not [x for x in m.db.pending_exchanges() if x["id"] == e["id"]]
+
+def test_exch_decline_via_prefixed_button(m):
+    """v12.17: отклонить заявку по кнопке с префиксом a:."""
+    m.db.add_gold(2, 10**9)
+    ok, gold, _ = m.db.create_exchange(2, 3)
+    assert ok
+    e = m.db.pending_exchanges()[-1]
+    sent = Sent(); fake_bot(m, sent)
+    cb = handler(m, "cb_crm")
+    run(cb(CB(1, f"a:exch:dec:{e['id']}", Msg(1))))
+    assert not [x for x in m.db.pending_exchanges() if x["id"] == e["id"]]

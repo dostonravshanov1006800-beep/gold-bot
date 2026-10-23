@@ -256,7 +256,11 @@ async def open_banner(c: CallbackQuery, url: str, text: str, reply_markup=None):
     # сообщением (скрин 22:42). Теперь: фото+подпись единым пузырём,
     # недоступное для удаления старое сообщение просто остаётся.
     try:
-        if len(text) <= 1024:
+        # v12.17: лимит Telegram считается по ВИДИМЫМ знакам, а не по HTML:
+        # теги <tg-emoji>/<b> раздували строку в 1,5-2 раза и подпись
+        # «не влезавшая» уходила отдельным сообщением (скрин 23:24)
+        visible = len(re.sub(r"<[^>]+>", "", text))
+        if visible <= 1024:
             sent = await c.message.answer_photo(url, caption=text, reply_markup=reply_markup)
             await _screen_remember(c.message, sent)
         else:
@@ -898,7 +902,7 @@ async def cb_refguide(c: CallbackQuery):
     """Справочник всех функций (v12.10): фирменный баннер + раскрываемые
     цитаты. open_banner сам шлёт фото, длинный текст следом и убирает
     старый экран (edit_text на фото падал; 22.10)."""
-    await open_banner(c, REF_BANNER_URL, reference_pack(),
+    await open_banner(c, REF_BANNER_URL, reference_caption(),
                       reply_markup=back_kb())
     await c.answer()
 
@@ -1994,6 +1998,30 @@ async def cmd_referrals(m: Message):
         ))
 
 
+def reference_caption():
+    """Справочник одним сообщением (v12.17): подпись ВНУТРИ баннера.
+    Лимит подписи Telegram — 1024 знака, полный разбор каждой функции
+    живёт в закреплённых анонсах групп; тут — все разделы по строке.
+    reference_pack() (полный, 3110 зн.) остаётся для анонсов."""
+    L = [
+        f"{pe('games')} <b>Игры</b>: Футбол · Баскетбол · Боулинг · Кубы · Дартс · Слоты — в личке кнопками, в группе текстом: «Футбол 100», «Слоты 500», ставка до 1 млрд или «все».",
+        f"{pe('wallet')} <b>Профиль</b>: баланс, друзья, уровень 1–100 (апгрейд за Голду).",
+        f"{pe('gift')} <b>Бонус</b>: раз в {BONUS_HOURS} ч +{fg(BONUS_GOLD)} G (/bonus). Промокод — напиши код в любом чате.",
+        f"{pe('star')} <b>Пополнить</b>: Stars → Голда сразу, +10/20/30% бонус за пачку.",
+        f"{pe('coin')} <b>Обмен</b>: Голда → Stars, курс 1 Star = {fg(db.stars_rate())} G, сгорает, Stars шлёт админ.",
+        f"{pe('gem')} <b>Кейсы</b>: косметика за Голду, редко — редкая.",
+        f"{pe('people')} <b>Клан</b>: с 10 уровня, взнос в банк, война недели за приз.",
+        f"{pe('trophy')} <b>Джекпот</b>: тираж 21:00 Ташкент, банк из комиссий игр и дуэлей.",
+        f"{pe('bolt')} <b>Дуэли</b>: в группе reply + «дуэль футбол 100». Победителю 95%, 5% в джекпот.",
+        f"{pe('right')} <b>Переводы</b>: в группе reply + сумма («тебе 500»).",
+        f"{pe('tasks')} <b>Задания</b>: подписка на канал → Голда по кнопке «Проверить».",
+        f"{pe('shop')} <b>Магазин</b>: товары за Голду, приз выдаёт админ.",
+        f"{pe('crown')} <b>Топ и Банк</b>: по топу розыгрыш Банка — топ-3 крупные доли.",
+        f"{pe('wave')} <b>Рефералы</b>: /referrals — +25 G за друга.",
+    ]
+    return f"{pe('info')} <b>Funapp · Справочник</b>\n" + "\n".join(L)
+
+
 def reference_pack():
     """Справочник всех функций бота — 10 сворачиваемых цитат (v11.47).
     Используется в /help и вторым сообщением в /start."""
@@ -2085,14 +2113,17 @@ async def cmd_help(m: Message):
     if adm:
         text += f"\n\n{pe('robot')} Админ: /admin"
     await _screen_forget(m)                 # v12.15: прошлый экран вон
-    banner = None                           # v12.10: баннер справочника
+    # v12.17: справочник ВНУТРИ баннера — один пузырь (раньше текст
+    # шёл отдельным сообщением, скрин 23:24)
+    cap = reference_caption()
+    if adm:
+        cap += f"\n{pe('robot')} Админ: /admin"
     try:
-        if REF_BANNER_URL:
-            banner = await m.answer_photo(REF_BANNER_URL)
+        sent = await m.answer_photo(REF_BANNER_URL, caption=cap,
+                                    reply_markup=back_kb())
     except TelegramAPIError:
-        banner = None
-    sent = await m.answer(text, reply_markup=back_kb())
-    await _screen_remember(m, banner, sent)
+        sent = await m.answer(cap, reply_markup=back_kb())
+    await _screen_remember(m, sent)
 
 # ---------- CRM-админка внутри бота ----------
 import crm
