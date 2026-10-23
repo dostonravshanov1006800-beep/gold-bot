@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import sqlite3
 import time
 
@@ -106,6 +107,52 @@ CREATE TABLE IF NOT EXISTS payments(
     ts INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS ledger(
+    ts INTEGER,
+    user_id INTEGER,
+    delta INTEGER,
+    kind TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
+CREATE INDEX IF NOT EXISTS idx_ledger_kind ON ledger(kind);
+CREATE TABLE IF NOT EXISTS cosmetics(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    kind TEXT,
+    value TEXT,
+    rarity TEXT,
+    created INTEGER
+);
+CREATE TABLE IF NOT EXISTS duels(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER,
+    game TEXT,
+    stake INTEGER,
+    p1 INTEGER,
+    p2 INTEGER,
+    status TEXT DEFAULT 'open',
+    winner INTEGER,
+    created INTEGER
+);
+CREATE TABLE IF NOT EXISTS clans(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    owner INTEGER,
+    created INTEGER
+);
+CREATE TABLE IF NOT EXISTS clan_members(
+    user_id INTEGER PRIMARY KEY,
+    clan_id INTEGER,
+    joined INTEGER
+);
+CREATE TABLE IF NOT EXISTS exchanges(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    gold INTEGER,
+    stars INTEGER,
+    status TEXT DEFAULT 'pending',
+    created INTEGER
+);
 CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT
@@ -117,6 +164,11 @@ CREATE TABLE IF NOT EXISTS game_stats(
     ts INTEGER
 );"""
 
+
+SCHEMA_ECON = """
+CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
+CREATE INDEX IF NOT EXISTS idx_ledger_kind ON ledger(kind);
+"""
 
 def init():
     global _conn
@@ -140,6 +192,21 @@ def init():
             _conn.execute(f"ALTER TABLE users ADD COLUMN {col} {dflt}")
         except sqlite3.OperationalError:
             pass
+    for col, dflt in [("level", "INTEGER DEFAULT 0"),        # v12: платные уровни
+                      ("spent", "INTEGER DEFAULT 0")]:       # v12: сожжено (витрина)
+        try:
+            _conn.execute(f"ALTER TABLE users ADD COLUMN {col} {dflt}")
+        except sqlite3.OperationalError:
+            pass
+    for col, dflt in [("stock", "INTEGER DEFAULT 0"),          # v12: лимит-товары
+                      ("sold", "INTEGER DEFAULT 0"),
+                      ("until_ts", "INTEGER DEFAULT 0"),      # v12: сезонные коллекции
+                      ("price_step", "INTEGER DEFAULT 0")]:   # v12: рост цены за штуку, %
+        try:
+            _conn.execute(f"ALTER TABLE items ADD COLUMN {col} {dflt}")
+        except sqlite3.OperationalError:
+            pass
+    _conn.executescript(SCHEMA_ECON)
     _conn.commit()
 
 
@@ -198,8 +265,10 @@ def set_ref(uid, ref):
     return bool(cur.rowcount)
 
 
-def add_gold(uid, amount):
+def add_gold(uid, amount, kind=None):
     ex("UPDATE users SET gold = gold + ? WHERE id=?", (amount, uid))
+    if kind:
+        log_econ(uid, amount, kind)
 
 
 def take_gold(uid, amount):
@@ -232,6 +301,8 @@ def claim_bonus(uid, ts, wait_sec, amount):
     cur = ex("UPDATE users SET last_bonus=?, gold=gold+? "
              "WHERE id=? AND last_bonus+?<=?", (ts, amount, uid, wait_sec, ts))
     _conn.commit()
+    if cur.rowcount > 0:
+        log_econ(uid, amount, "bonus")
     return cur.rowcount > 0
 
 
@@ -284,7 +355,7 @@ def redeem_promo(code, uid):
         return "limit", r["amount"]
     ex("INSERT OR IGNORE INTO promo_used VALUES(?,?)", (r["id"], uid))
     ex("UPDATE promos SET uses=uses+1 WHERE id=?", (r["id"],))
-    add_gold(uid, r["amount"])
+    add_gold(uid, r["amount"], "promo")
     return "ok", r["amount"]
 
 
@@ -330,6 +401,7 @@ def process_payment_idempotent(charge_id, uid, gold_amt):
         ex("INSERT INTO payments(charge_id, user_id, amount, ts) VALUES(?,?,?,?)",
            (charge_id, uid, gold_amt, int(time.time())))
         ex("UPDATE users SET gold = gold + ? WHERE id=?", (gold_amt, uid))
+        log_econ(uid, gold_amt, "topup")
         return True
     except sqlite3.IntegrityError:
         return False
@@ -347,6 +419,352 @@ def pay_ref_bonus(uid, ref_by, amount):
     return bool(cur.rowcount)
 
 
+
+# ---------- экономика v12: леджер, сжигание, уровни, кейсы, дуэли,
+# джекпот, кланы, лимит-товары, обмен G→Stars, витрина ----------
+
+def log_econ(uid, delta, kind):
+    ex("INSERT INTO ledger(ts, user_id, delta, kind) VALUES(?,?,?,?)",
+       (int(time.time()), uid, delta, kind))
+
+def econ_report():
+    """Отчёт по потокам голды: kinds за сегодня / неделю / всё время."""
+    def by(kind=None, since=0):
+        if kind:
+            r = one("SELECT COALESCE(SUM(delta),0) s, COUNT(*) c FROM ledger "
+                    "WHERE kind=? AND ts>=?", (kind, since))
+        else:
+            r = one("SELECT COALESCE(SUM(delta),0) s, COUNT(*) c FROM ledger "
+                    "WHERE ts>=?", (since,))
+        return r["s"], r["c"]
+    def kinds(since):
+        return {r["kind"]: r["s"] for r in
+                q("SELECT kind, SUM(delta) s FROM ledger WHERE ts>=? "
+                  "GROUP BY kind ORDER BY s", (since,))}
+    today0 = int(time.time()) // 86400 * 86400
+    week0 = int(time.time()) - 7 * 86400
+    return kinds(today0), kinds(week0), kinds(0)
+
+# --- сжигание: списание + учёт spent (витрина богатства) ---
+
+def burn_gold(uid, amount, kind):
+    """Атомарное сожжение: True если хватило. amount уходит из экономики,
+    spent растёт (для «Витрины богатства»)."""
+    cur = ex("UPDATE users SET gold = gold - ?, spent = spent + ? "
+             "WHERE id = ? AND gold >= ?", (amount, amount, uid, amount))
+    if cur.rowcount == 1:
+        log_econ(uid, -amount, kind)
+        return True
+    return False
+
+def top_spent(limit=10):
+    """Витрина богатства: кто больше всего сжёг голды на статус."""
+    return q("SELECT id, username, spent, level FROM users "
+             "WHERE spent > 0 ORDER BY spent DESC, id ASC LIMIT ?", (limit,))
+
+# --- уровни (косметика и престиж, не голда) ---
+
+LEVEL_COSTS = [100, 500, 2000, 10000, 50000]
+
+def upgrade_level(uid):
+    """Атомарный апгрейд: списание cost + level+1 одним UPDATE.
+    Возвращает (ok, new_level, cost)."""
+    u = get_user(uid)
+    if not u:
+        return False, 0, 0
+    lv = u["level"] or 0
+    if lv >= len(LEVEL_COSTS):
+        return False, lv, 0
+    cost = LEVEL_COSTS[lv]
+    cur = ex("UPDATE users SET gold = gold - ?, spent = spent + ?, level = level + 1 "
+             "WHERE id = ? AND gold >= ? AND level = ?",
+             (cost, cost, uid, cost, lv))
+    if cur.rowcount == 1:
+        log_econ(uid, -cost, "level")
+        return True, lv + 1, cost
+    return False, lv, cost
+
+# --- кейсы (голда сгорает, дубликат возвращает лишь пятую часть) ---
+
+CASE_COST = 500
+CASE_DUP_REFUND = 100
+CASE_POOL = [  # (kind, value, rarity, вес)
+    ("frame", "Золотая рамка в топе", "common", 30),
+    ("frame", "Рамка «Алмаз» в топе", "rare", 10),
+    ("frame", "Рамка «Корона» в топе", "epic", 3),
+    ("color", "Цвет имени «Изумруд»", "common", 25),
+    ("color", "Цвет имени «Рубин»", "rare", 12),
+    ("color", "Цвет имени «Аметист»", "epic", 4),
+    ("title", "Титул «Легенда Funapp»", "legend", 1),
+]
+
+def has_cosmetic(uid, kind, value):
+    return bool(one("SELECT id FROM cosmetics WHERE user_id=? AND kind=? AND value=?",
+                    (uid, kind, value)))
+
+def add_cosmetic(uid, kind, value, rarity):
+    ex("INSERT INTO cosmetics(user_id, kind, value, rarity, created) VALUES(?,?,?,?,?)",
+       (uid, kind, value, rarity, int(time.time())))
+
+def user_cosmetics(uid):
+    return q("SELECT * FROM cosmetics WHERE user_id=? ORDER BY id DESC", (uid,))
+
+def open_case(uid):
+    """Открывает кейс: -CASE_COST, случайная косметика по весам.
+    Дубликат не дублируется: вместо него +CASE_DUP_REFUND (20% стоимости).
+    Возвращает ('new'|'dup'|'poor', item, refund)."""
+    if not burn_gold(uid, CASE_COST, "case"):
+        return "poor", None, 0
+    total_w = sum(it[3] for it in CASE_POOL)
+    pick = random.randrange(total_w)
+    acc = 0
+    for it in CASE_POOL:
+        acc += it[3]
+        if pick < acc:
+            kind, value, rarity = it[0], it[1], it[2]
+            break
+    if has_cosmetic(uid, kind, value):
+        add_gold(uid, CASE_DUP_REFUND, "case_refund")
+        return "dup", (kind, value, rarity), CASE_DUP_REFUND
+    add_cosmetic(uid, kind, value, rarity)
+    return "new", (kind, value, rarity), 0
+
+# --- дуэли (голда ходит между игроками, 5% банка -> джекпот) ---
+
+DUEL_FEE_PCT = 5
+
+def create_duel(chat_id, game, stake, p1):
+    cur = ex("INSERT INTO duels(chat_id, game, stake, p1, created) "
+             "VALUES(?,?,?,?,?)", (chat_id, game, stake, p1, int(time.time())))
+    return cur.lastrowid
+
+def get_duel(did):
+    return one("SELECT * FROM duels WHERE id=?", (did,))
+
+def duel_accept(did, p2):
+    """Атомарный приём дуэли: оба игрока платят ставку в банк одной транзакцией."""
+    d = get_duel(did)
+    if not d or d["status"] != "open" or d["p1"] == p2:
+        return False
+    with TX_LOCK:
+        try:
+            _conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            for uid in (d["p1"], p2):
+                cur = _conn.execute(
+                    "UPDATE users SET gold = gold - ? WHERE id = ? AND gold >= ?",
+                    (d["stake"], uid, d["stake"]))
+                if cur.rowcount != 1:
+                    try: _conn.execute("ROLLBACK")
+                    except Exception: pass
+                    return False
+            _conn.execute("UPDATE duels SET p2=?, status='accepted' WHERE id=?", (p2, did))
+            _conn.commit()
+        except Exception:
+            try: _conn.execute("ROLLBACK")
+            except Exception: pass
+            return False
+    log_econ(d["p1"], -d["stake"], "duel")
+    log_econ(p2, -d["stake"], "duel")
+    return True
+
+def duel_resolve(did, winner):
+    """Победитель забирает банк минус 5% в джекпот. loser получает ничего."""
+    d = get_duel(did)
+    if not d or d["status"] != "accepted":
+        return None
+    pot = d["stake"] * 2
+    fee = pot * DUEL_FEE_PCT // 100
+    ex("UPDATE duels SET status='done', winner=? WHERE id=?", (winner, did))
+    add_gold(winner, pot - fee, "duel_win")
+    jackpot_add(fee)
+    return pot, fee
+
+def open_duels(chat_id):
+    return q("SELECT * FROM duels WHERE chat_id=? AND status='open' "
+             "ORDER BY id DESC LIMIT 5", (chat_id,))
+
+# --- глобальный джекпот (1% каждой ставки, тираж раз в сутки) ---
+
+def jackpot_pool():
+    try:
+        return int(get_meta("jackpot_pool") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+def jackpot_add(amount):
+    if amount <= 0:
+        return
+    ex("INSERT OR REPLACE INTO meta(key, value) VALUES('jackpot_pool', "
+       "COALESCE((SELECT value FROM meta WHERE key='jackpot_pool'), 0) + ?)", (amount,))
+    _conn.commit()
+
+def jackpot_set_pool(v):
+    put_meta("jackpot_pool", str(v))
+
+def jackpot_active_players(since_ts):
+    return [r["user_id"] for r in
+            q("SELECT DISTINCT user_id FROM ledger "
+              "WHERE kind IN ('stake', 'duel') AND ts>=? "
+              "ORDER BY user_id", (since_ts,))]
+
+# --- кланы (создание сжигает голду, взнос идёт в недельный банк войны) ---
+
+CLAN_CREATE_COST = 1000
+CLAN_JOIN_COST = 100
+
+def clan_create(uid, name):
+    """Создание клана: -1000 (сгорает). Создатель становится членом."""
+    name = (name or "").strip()
+    if not (3 <= len(name) <= 24):
+        return "Имя клана: от 3 до 24 символов"
+    if one("SELECT user_id FROM clan_members WHERE user_id=?", (uid,)):
+        return "Сначала выйди из текущего клана"
+    if not burn_gold(uid, CLAN_CREATE_COST, "clan"):
+        return f"Не хватает Голды: создание клана стоит {CLAN_CREATE_COST}"
+    try:
+        cur = ex("INSERT INTO clans(name, owner, created) VALUES(?,?,?)",
+                 (name, uid, int(time.time())))
+    except sqlite3.IntegrityError:
+        ex("UPDATE users SET spent = spent - ? WHERE id=?",
+           (CLAN_CREATE_COST, uid))          # откат витрины тоже
+        add_gold(uid, CLAN_CREATE_COST, "clan_refund")
+        return "Клан с таким именем уже есть"
+    ex("INSERT OR REPLACE INTO clan_members(user_id, clan_id, joined) VALUES(?,?,?)",
+       (uid, cur.lastrowid, int(time.time())))
+    return None
+
+def clan_join(uid, clan_id):
+    """Вступление: взнос 100 идёт в недельный банк войны кланов."""
+    if one("SELECT user_id FROM clan_members WHERE user_id=?", (uid,)):
+        return "Ты уже в клане"
+    clan = one("SELECT id FROM clans WHERE id=?", (clan_id,))
+    if not clan:
+        return "Клан не найден"
+    if not burn_gold(uid, CLAN_JOIN_COST, "clanfee"):
+        return f"Не хватает Голды: взнос за вход {CLAN_JOIN_COST}"
+    ex("INSERT OR REPLACE INTO clan_members(user_id, clan_id, joined) VALUES(?,?,?)",
+       (uid, clan_id, int(time.time())))
+    pool = int(get_meta("clan_pool") or 0) + CLAN_JOIN_COST
+    put_meta("clan_pool", str(pool))
+    return None
+
+def clan_leave(uid):
+    ex("DELETE FROM clan_members WHERE user_id=?", (uid,))
+
+def my_clan(uid):
+    return one("SELECT c.*, "
+               "(SELECT COUNT(*) FROM clan_members m WHERE m.clan_id=c.id) members "
+               "FROM clans c JOIN clan_members m ON m.clan_id=c.id "
+               "WHERE m.user_id=?", (uid,))
+
+def clans_top(limit=10, since_ts=0):
+    """Топ кланов: недельный счёт = сумма выигрышей членов (ledger gwin)."""
+    return q(
+        "SELECT c.id, c.name, "
+        "(SELECT COUNT(*) FROM clan_members m WHERE m.clan_id=c.id) members, "
+        "COALESCE((SELECT SUM(l.delta) FROM ledger l "
+        " JOIN clan_members m2 ON m2.user_id=l.user_id "
+        " WHERE m2.clan_id=c.id AND l.kind='gwin' AND l.ts>=?), 0) score "
+        "FROM clans c ORDER BY score DESC, c.id ASC LIMIT ?",
+        (since_ts, limit))
+
+def clan_pool():
+    try:
+        return int(get_meta("clan_pool") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+def clan_war_resolve(week0):
+    """Финал недельной войны: топ-клан делит банк поровну. Возвращает
+    (winner_clan, prize, members) или None."""
+    rows = clans_top(20, week0)
+    if not rows or clan_pool() < CLAN_JOIN_COST:
+        return None
+    winner = rows[0]
+    if (winner["score"] or 0) <= 0:
+        return None
+    members = [r["user_id"] for r in
+               q("SELECT user_id FROM clan_members WHERE clan_id=?", (winner["id"],))]
+    if not members:
+        return None
+    prize = clan_pool()
+    share = prize // len(members)
+    rest = prize - share * len(members)
+    for uid in members:
+        add_gold(uid, share, "clanprize")
+    if rest:
+        add_gold(winner["owner"], rest, "clanprize")
+    put_meta("clan_pool", "0")
+    return winner, prize, members
+
+# --- лимит-товары и сезонные коллекции ---
+
+def item_price(it):
+    """Цена растёт на price_step% за каждую проданную штуку (дефицит)."""
+    base = it["cost"]
+    if it["price_step"]:
+        for _ in range(it["sold"] or 0):
+            base = base * (100 + it["price_step"]) // 100
+    return base
+
+def items_seasonal():
+    """Активные товары: только неистёкшие (сезонные коллекции)."""
+    now = int(time.time())
+    return q("SELECT * FROM items WHERE active=1 AND (until_ts=0 OR until_ts>?) "
+             "ORDER BY id", (now,))
+
+def buy_item_limited(uid, it):
+    """Покупка с учётом лимита и растущей цены. Возвращает (ok, price, reason)."""
+    if it["stock"] and (it["sold"] or 0) >= it["stock"]:
+        return False, 0, "Товар распродан"
+    price = item_price(it)
+    if not burn_gold(uid, price, "shop"):
+        return False, price, "Не хватает Голды"
+    cur = ex("UPDATE items SET sold = sold + 1 WHERE id = ? "
+             "AND (stock = 0 OR sold < stock)", (it["id"],))
+    if cur.rowcount != 1:                  # кто-то успел раньше — возврат
+        add_gold(uid, price, "shop_refund")
+        return False, price, "Товар распродан"
+    return True, price, None
+
+# --- обмен Голды на Stars (курс задаёт админ, Stars шлёт админ вручную) ---
+
+def stars_rate():
+    try:
+        return int(get_meta("stars_rate") or 10000)
+    except (TypeError, ValueError):
+        return 10000
+
+def set_stars_rate(rate):
+    put_meta("stars_rate", str(int(rate)))
+
+def create_exchange(uid, stars):
+    """Сжигает голду по курсу, создаёт заявку на Stars.
+    Возвращает (ok, gold, reason)."""
+    rate = stars_rate()
+    gold = rate * stars
+    if not burn_gold(uid, gold, "exchange"):
+        return False, gold, f"Не хватает Голды: {stars} Stars = {gold} G"
+    cur = ex("INSERT INTO exchanges(user_id, gold, stars, created) "
+             "VALUES(?,?,?,?)", (uid, gold, stars, int(time.time())))
+    return True, gold, None
+
+def pending_exchanges():
+    return q("SELECT * FROM exchanges WHERE status='pending' ORDER BY id")
+
+def done_exchange(eid):
+    ex("UPDATE exchanges SET status='done' WHERE id=?", (eid,))
+
+def decline_exchange(eid):
+    e = one("SELECT * FROM exchanges WHERE id=? AND status='pending'", (eid,))
+    if e:
+        ex("UPDATE exchanges SET status='declined' WHERE id=?", (eid,))
+        add_gold(e["user_id"], e["gold"], "exchange_refund")
+    return e
+
 def wal_checkpoint():
     """Сshedule: проталкиваем WAL в главный файл перед git add (снимок полный)."""
     try:
@@ -363,8 +781,12 @@ def prune_old():
 
 # ---------- shop ----------
 
-def add_item(title, cost):
-    cur = ex("INSERT INTO items(title, cost) VALUES(?,?)", (title, cost))
+def add_item(title, cost, stock=0, days=0, step=0):
+    """v12: опционально шт=N (лимит), дней=N (сезонная коллекция),
+    рост=N (цена +N% за каждую проданную штуку)."""
+    until = int(time.time()) + days * 86400 if days else 0
+    cur = ex("INSERT INTO items(title, cost, stock, until_ts, price_step) "
+             "VALUES(?,?,?,?,?)", (title, cost, stock, until, step))
     return cur.lastrowid
 
 
@@ -463,6 +885,10 @@ def transfer(from_id, to_id, amount, chat_id):
                 return False, row["gold"]
             _conn.execute("INSERT INTO transfers(from_id,to_id,amount,chat_id) "
                           "VALUES(?,?,?,?)", (from_id, to_id, amount, chat_id))
+            _conn.execute("INSERT INTO ledger(ts,user_id,delta,kind) VALUES "
+                          "(?,?,?,?),(?,?,?,?)",
+                          (int(time.time()), from_id, -amount, "transfer_out",
+                           int(time.time()), to_id, amount, "transfer_in"))
             _conn.commit()
             return True, row["gold"] - amount
         except Exception:
@@ -506,12 +932,14 @@ def balance(uid):
     return r[0]["gold"] if r else 0
 
 
-def charge_gold(uid, amount):
+def charge_gold(uid, amount, kind=None):
     """Атомарное списание одной SQL-командой: True если хватило и списалось."""
     cur = _conn.execute(
         "UPDATE users SET gold = gold - ? WHERE id = ? AND gold >= ?",
         (amount, uid, amount))
     _conn.commit()
+    if cur.rowcount == 1 and kind:
+        log_econ(uid, -amount, kind)
     return cur.rowcount == 1
 
 

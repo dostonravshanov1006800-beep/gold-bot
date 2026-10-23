@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 
 from aiogram import F
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -92,6 +93,7 @@ def setup(ctx):
             [b("Юзеры", "users", "people"), b("Рассылка", "bc", "info")],
             [b("Банк", "bank", "coin"), b("Переводы", "tx", "right")],
             [b("Промокоды", "promo", "star"), b("В группы", "bcg", "info")],
+            [b("Экономика", "econ", "stats"), b("Обмен G→Stars", "exch", "stars")],
         ]
 
     def screen_home():
@@ -309,11 +311,77 @@ def setup(ctx):
                 "«Во все группы сразу» — в каждую, где бот активен.")
         return text, kb(*rows, *nav("bcg"))
 
+    def screen_econ():
+        """Баланс экономики: добыто/сожжено/в обороте + джекпот + инфляция."""
+        KIND_RU = {
+            "task": "Задания", "bonus": "Бонусы", "promo": "Промокоды",
+            "topup": "Пополнения Stars", "ref": "Рефералы", "bank": "Банк админа",
+            "case": "Кейсы (сожжено)", "case_refund": "Возвраты кейсов",
+            "level": "Уровни (сожжено)", "shop": "Магазин (сожжено)",
+            "clan": "Создание кланов (сожжено)", "clanfee": "Взносы в кланы",
+            "exchange": "Обмен в Stars (сожжено)", "jackpot": "Джекпот-выплаты",
+            "duel": "Ставки дуэлей", "duel_win": "Победы дуэлей",
+            "stake": "Ставки игр", "gwin": "Выигрыши игр",
+            "transfer_in": "Переводы (входящие)", "transfer_out": "Переводы (исходящие)",
+        }
+        BURN = {"case", "level", "shop", "clan", "clanfee", "exchange"}
+        MINE = {"task", "bonus", "promo", "topup", "ref", "bank"}
+
+        def render(kinds, title):
+            lines = [f"{pe('stats')} <b>{title}</b>"]
+            for k, v in sorted(kinds.items(), key=lambda x: -x[1]):
+                lines.append(f"• {KIND_RU.get(k, k)}: <b>{fg(v)}</b>")
+            return "\n".join(lines) if len(lines) > 1 else f"{title}: нет движения"
+
+        today, week, all_ = db.econ_report()
+
+        def total(kinds, keys):
+            return sum(v for k, v in kinds.items() if k in keys)
+
+        burned_today = total(today, BURN)
+        mine_today = total(today, MINE)
+        users, gold, pend = db.stats()
+        infl = mine_today - burned_today
+        text = (
+            f"{pe('stats')} <b>CRM · Экономика Голды</b>\n\n"
+            f"{pe('coin')} В обороте у юзеров: <b>{fg(gold)}</b>\n"
+            f"{pe('gem')} Джекпот: <b>{fg(db.jackpot_pool())}</b> · "
+            f"Банк войны кланов: <b>{fg(db.clan_pool())}</b>\n"
+            f"{pe('up')} Эмиссия за день (добыто − сожжено): "
+            f"<b>{'+' if infl >= 0 else ''}{fg(infl)}</b>\n\n"
+            + render(today, "Сегодня")
+            + "\n\n" + render(week, "За 7 дней") + "\n\n"
+            + render(all_, "За всё время")
+        )
+        return text, kb(*nav("econ"))
+
+    def screen_exch():
+        rate = db.stars_rate()
+        pend = db.pending_exchanges()
+        lines = [f"{pe('stars')} <b>CRM · Обмен Голды на Stars</b>\n\n"
+                 f"Курс: <b>1 Star = {fg(rate)} G</b> (голда сгорает, Stars шлёт админ вручную)\n"]
+        if pend:
+            lines.append(f"{pe('inbox')} <b>Заявки:</b>")
+            for e in pend:
+                u = db.get_user(e["user_id"])
+                un = "@" + u["username"] if u and u["username"] else str(e["user_id"])
+                lines.append(
+                    f"#{e['id']} · {un} · {fg(e['gold'])} G → {e['stars']} Stars")
+        else:
+            lines.append("Заявок нет.")
+        rows = [[btn("Изменить курс", "exch:rate", "edit"),
+                 btn("Создать заявку", "exch:add", "plus")]]
+        for e in pend:
+            rows.append([btn(f"#{e['id']} выдать Stars", f"exch:done:{e['id']}", "check"),
+                         btn(f"#{e['id']} отклонить", f"exch:dec:{e['id']}", "cross")])
+        return "\n".join(lines), kb(*rows, *nav("exch"))
+
     SCREENS = {
         "home": screen_home, "tasks": screen_tasks, "shop": screen_shop,
         "reqs": screen_reqs, "users": screen_users, "bc": screen_bc,
         "bank": screen_bank, "tx": screen_tx,
         "promo": screen_promo, "bcg": screen_bcg,
+        "econ": screen_econ, "exch": screen_exch,
     }
 
     async def show(c: CallbackQuery, key, note=None):
@@ -422,6 +490,48 @@ def setup(ctx):
             db.tx_toggle(int(arg))
             text, markup = screen_tx_chat(int(arg))
             await c.message.edit_text(text, reply_markup=markup)
+            await c.answer()
+        elif sec == "exch" and act == "rate":
+            _await_set(uid, {"kind": "rate", "msg": ref})
+            await c.message.edit_text(
+                f"{pe('edit')} <b>Новый курс обмена</b>\n\n"
+                "Пришли голду за 1 Star (целое число).\n"
+                f"Сейчас: <b>{fg(db.stars_rate())} G</b>",
+                reply_markup=kb([btn("Отмена", "a:exch", "back")]))
+            await c.answer()
+        elif sec == "exch" and act == "add":
+            _await_set(uid, {"kind": "exch", "msg": ref})
+            await c.message.edit_text(
+                f"{pe('plus')} <b>Новая заявка на обмен</b>\n\n"
+                "Пришли: <code>user_id количество_Stars</code>\n"
+                f"Курс: 1 Star = {fg(db.stars_rate())} G — голда спишется и сгорит,\n"
+                "Stars нужно отправить игроку вручную.",
+                reply_markup=kb([btn("Отмена", "a:exch", "back")]))
+            await c.answer()
+        elif sec == "exch" and act == "done":
+            e = db.one("SELECT * FROM exchanges WHERE id=?", (int(arg),))
+            db.done_exchange(int(arg))
+            if e:
+                try:
+                    await BOT.send_message(
+                        e["user_id"],
+                        f"{pe('stars')} Обмен выполнен — Stars отправлены админом. "
+                        "Проверь сообщение от него.")
+                except Exception:
+                    pass
+            await show(c, "exch", f"{pe('check')} Заявка #{arg} закрыта — Stars выданы")
+            await c.answer()
+        elif sec == "exch" and act == "dec":
+            e = db.decline_exchange(int(arg))
+            if e:
+                try:
+                    await BOT.send_message(
+                        e["user_id"],
+                        f"{pe('sad')} Заявка на обмен отклонена — "
+                        f"{fg(e['gold'])} {pe('coin')} вернулись на баланс.")
+                except Exception:
+                    pass
+            await show(c, "exch", f"{pe('check')} Заявка #{arg} отклонена, голда возвращена")
             await c.answer()
         elif sec == "tx" and act == "th":
             db.tx_set_confirm(int(arg), int(parts[4]))
@@ -603,7 +713,35 @@ def setup(ctx):
                 pass
             await BOT.send_message(chat_id, note)
 
-        if kind == "addtask":
+        if kind == "rate":
+            try:
+                rate = int(m.text.strip())
+            except ValueError:
+                return await bad(f"{pe('warn')} Нужно целое число (голда за 1 Star)")
+            if rate < 100:
+                return await bad(f"{pe('warn')} Курс не ниже 100 G за Star")
+            db.set_stars_rate(rate)
+            await done("exch", f"{pe('check')} Курс: 1 Star = {fg(rate)} G")
+        elif kind == "exch":
+            parts = m.text.split()
+            if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+                return await bad(f"{pe('warn')} Формат: user_id Stars (например 8396883978 10)")
+            target, stars = int(parts[0]), int(parts[1])
+            u = db.get_user(target)
+            if not u or stars <= 0 or stars > 10000:
+                return await bad(f"{pe('warn')} Юзер не найден или Stars вне 1–10000")
+            ok, gold, reason = db.create_exchange(target, stars)
+            if not ok:
+                return await bad(f"{pe('warn')} {reason}")
+            try:
+                await BOT.send_message(
+                    target,
+                    f"{pe('stars')} Заявка на обмен создана: {stars} Stars за "
+                    f"{fg(gold)} {pe('coin')}. Голда списана, Stars придут от админа.")
+            except Exception:
+                pass
+            await done("exch", f"{pe('check')} Заявка: {stars} Stars у юзера {target} (сожжено {fg(gold)} G)")
+        elif kind == "addtask":
             parts = m.text.split()
             if len(parts) != 2 or not parts[0].startswith("@") or not parts[1].isdigit() or int(parts[1]) <= 0:
                 return await bad(f"{pe('warn')} Формат: @канал награда (например @mychannel 50)")
@@ -612,9 +750,23 @@ def setup(ctx):
         elif kind == "additem":
             parts = m.text.split(maxsplit=1)
             if len(parts) != 2 or not parts[0].isdigit() or int(parts[0]) <= 0:
-                return await bad(f"{pe('warn')} Формат: цена название (например 150 Telegram Premium)")
-            db.add_item(parts[1].strip(), int(parts[0]))
-            await done("shop", f"{pe('check')} Товар «{parts[1].strip()}» · {parts[0]}")
+                return await bad(f"{pe('warn')} Формат: цена название "
+                                "(например 150 Telegram Premium).\n"
+                                "Лимиты: <code>150 Товар шт=10 дней=14 рост=25</code> — "
+                                "10 штук, коллекция 14 дней, +25% к цене за штуку.")
+            opts = {"stock": 0, "days": 0, "step": 0}
+            rest = parts[1].strip()
+            for key in ("шт", "дней", "рост"):
+                m2 = re.search(rf"{key}=(\d+)", rest)
+                if m2:
+                    opts[{"шт": "stock", "дней": "days", "рост": "step"}[key]] = int(m2.group(1))
+                    rest = re.sub(rf"\s*{key}=\d+", "", rest).strip()
+            db.add_item(rest, int(parts[0]), stock=opts["stock"],
+                        days=opts["days"], step=opts["step"])
+            extra = (f" · лимит {opts['stock']} шт" if opts["stock"] else "") + \
+                    (f" · коллекция {opts['days']} дн" if opts["days"] else "") + \
+                    (f" · +{opts['step']}%/шт" if opts["step"] else "")
+            await done("shop", f"{pe('check')} Товар «{rest}» · {parts[0]}{extra}")
         elif kind == "give":
             try:
                 amount = int(m.text.strip())

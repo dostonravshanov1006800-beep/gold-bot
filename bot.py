@@ -211,6 +211,7 @@ def menu_kb(gold=0):
         [btn("Задания", "tasks", icon="tasks"), btn("Профиль", "profile", icon="wallet")],
         [btn("Игры", "games", icon="games"), btn("Магазин", "shop", icon="shop")],
         [btn("Бонус", "bonus", icon="gift"), btn("Пополнить", "topup", icon="stars")],
+        [btn("Кейс", "case", icon="present"), btn("Клан", "clan", icon="people")],
         [btn("Топ", "top", icon="trophy")],
         [btn("Справочник", "refguide", icon="info")],
     )
@@ -300,7 +301,7 @@ async def cmd_start(m: Message, command: CommandStart):
             # +25 пригласившему СРАЗУ при заходе друга (раньше — после первого
             # задания, из-за чего тесты «не видели» бонус; v11.34)
             if db.set_ref(m.from_user.id, ref):
-                db.add_gold(ref, REF_BONUS)
+                db.add_gold(ref, REF_BONUS, "ref")
                 try:
                     await BOT.send_message(
                         ref,
@@ -415,7 +416,7 @@ async def cb_check(c: CallbackQuery):
     if not db.try_claim_task(uid, tid):      # атомарный клейм: гонка параллельных кликов мертва
         await c.answer("Уже выполнено", show_alert=True)
         return
-    db.add_gold(uid, t["reward"])
+    db.add_gold(uid, t["reward"], "task")
     await c.answer(f"+{t['reward']} голды зачислено!", show_alert=True)
     text, markup = tasks_view(uid)
     await show(c, text, reply_markup=markup)
@@ -435,6 +436,7 @@ async def cb_games(c: CallbackQuery):
         [btn("Футбол", "g:football", icon="ball"), btn("Баскетбол", "g:basketball")],
         [btn("Боулинг", "g:bowling"), btn("Кубы", "g:cubes", icon="cube")],
         [btn("Дартс", "g:dart", icon="target"), btn("Слоты", "g:slots", icon="spin")],
+        [btn(f"Джекпот · {fg(db.jackpot_pool())} G", "jackpot", icon="gem")],
         [btn("Меню", "menu", icon="home")],
     )
     await open_banner(c, GAMES_BANNER_URL, text, reply_markup=markup)
@@ -566,8 +568,11 @@ def charge_uid(uid, amt):
         return None, "Ставка должна быть больше нуля"
     if stake <= 0:
         return None, "Не хватает Голды — заработай её на заданиях в личке бота"
-    if not db.charge_gold(uid, stake):     # атомарный UPDATE ... WHERE gold >= ?
+    if not db.charge_gold(uid, stake, "stake"):   # атомарный UPDATE ... WHERE gold >= ?
         return None, "Не хватает Голды — пополни баланс в личке бота"
+    jp = stake // 100                     # 1% каждой ставки -> глобальный джекпот
+    if jp:
+        db.jackpot_add(jp)
     return stake, None
 
 
@@ -584,7 +589,7 @@ async def play_dice_game(uid, game, stake, msg, back=True, group_id=None):
     fail_word = FAIL_TEXT.get(game, {}).get(val, "Не повезло")
     if pay:
         won = round(stake * pay)
-        db.add_gold(uid, won)
+        db.add_gold(uid, won, "gwin")
         db.track_game(uid, pay >= 1, won - stake if pay >= 1 else 0)
         if group_id:
             db.track_group_game(group_id, uid, pay >= 1, won - stake if pay >= 1 else 0)
@@ -637,7 +642,7 @@ async def roll_cube(uid, stake, side, msg, back=True, group_id=None):
     win, word = cube_outcome(side, val)
     if win:
         won = round(stake * CUBE_X)
-        db.add_gold(uid, won)
+        db.add_gold(uid, won, "gwin")
         db.track_game(uid, True, won - stake)
         if group_id:
             db.track_group_game(group_id, uid, True, won - stake)
@@ -711,11 +716,17 @@ def shop_view(uid):
         f"{pe('shop')} <b>Магазин</b>", "",
         f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>", "",
     ]
-    its = db.items()
+    its = db.items_seasonal()
     if not its:
         lines.append("Товары скоро появятся — загляни позже.")
     for it in its:
-        lines.append(f"{pe('tags')} {it['title']} — {fg(it['cost'])} {pe('coin')}")
+        price = db.item_price(it)
+        left = f" · осталось {it['stock'] - it['sold']}" if it["stock"] else ""
+        lines.append(f"{pe('tags')} {it['title']} — {fg(price)} {pe('coin')}{left}")
+        if it["until_ts"]:
+            lines.append(f"    <i>коллекция до {time.strftime('%d.%m', time.gmtime(it['until_ts']))}</i>")
+        if it["stock"] and it["sold"] >= it["stock"]:
+            continue
         rows.append([btn(f"Купить: {it['title']}", f"buy:{it['id']}", icon="present")])
     rows.append([btn("Меню", "menu", icon="home")])
     return "\n".join(lines), kb(*rows)
@@ -736,14 +747,15 @@ async def cb_buy(c: CallbackQuery):
     if not it or not it["active"]:
         await c.answer("Товар недоступен", show_alert=True)
         return
-    if not db.charge_gold(uid, it["cost"]):   # атомарное списание: минус невозможен
-        await c.answer("Не хватает Голды на балансе", show_alert=True)
+    ok, price, reason = db.buy_item_limited(uid, it)   # лимит + растущая цена
+    if not ok:
+        await c.answer(reason, show_alert=True)
         return
     rid = db.add_request(uid, iid)
     username = "@" + u["username"] if u["username"] else str(uid)
     await notify_admins(
         f"{pe('present')} Заявка #{rid}\nПользователь: {username} ({uid})\n"
-        f"Приз: {it['title']}\nВыдать: /done {rid}"
+        f"Приз: {it['title']}\nСожжено: {fg(price)} G\nВыдать: /done {rid}"
     )
     text, markup = shop_view(uid)
     await show(c, text, reply_markup=markup)
@@ -766,23 +778,36 @@ async def cb_balance(c: CallbackQuery):
 
 
 @DP.callback_query(F.data == "profile")
-async def cb_profile(c: CallbackQuery):
-    uid = c.from_user.id
-    u = db.get_user(uid)
+def profile_payload(uid, u=None):
+    u = u or db.get_user(uid)
     n = db.invited_count(uid)
-    await open_banner(c, PROFILE_BANNER_URL,
+    return (
         f"{pe('wallet')} <b>Профиль</b>\n\n"
         f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
-        f"Приглашено друзей: <b>{n}</b>\n\n"
+        f"{pe('up')} Уровень: <b>{u['level'] or 0}{f' из {len(db.LEVEL_COSTS)}' if (u['level'] or 0) < len(db.LEVEL_COSTS) else ' · максимум'}</b>\n"
+        f"{pe('people')} Приглашено друзей: <b>{n}</b>\n\n"
         f"{pe('people')} Твоя ссылка для друзей:\n"
         f"<code>https://t.me/{ME}?start=ref_{uid}</code>\n\n"
         f"<blockquote>Друг зашёл по ней — тебе <b>+{REF_BONUS} {pe('coin')}</b> сразу.</blockquote>",
-        reply_markup=kb(
+        kb(
             [btn("Пополнить", "topup", icon="stars"), btn("Задания", "tasks", icon="tasks")],
+            [btn("Улучшить уровень", "lvl", icon="up")],
             [btn("Меню", "menu", icon="home")],
         ),
     )
+
+
+@DP.callback_query(F.data == "profile")
+async def cb_profile(c: CallbackQuery):
+    uid = c.from_user.id
+    text, markup = profile_payload(uid)
+    await open_banner(c, PROFILE_BANNER_URL, text, reply_markup=markup)
     await c.answer()
+
+
+async def _profile_banner(c: CallbackQuery):
+    text, markup = profile_payload(c.from_user.id)
+    await open_banner(c, PROFILE_BANNER_URL, text, reply_markup=markup)
 
 
 @DP.callback_query(F.data == "refs")
@@ -855,7 +880,9 @@ async def cb_top(c: CallbackQuery):
         "<blockquote expandable>Иногда админ разыгрывает Банк по этому топу: "
         "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. Круглосуточная игра повышает шансы.</blockquote>"
     )
-    await show(c, text, reply_markup=back_kb())
+    await show(c, text, reply_markup=kb(
+        [btn("Витрина богатства", "topspent", icon="crown")],
+        [btn("Меню", "menu", icon="home")]))
     await c.answer()
 
 
@@ -875,6 +902,407 @@ async def cb_bonus(c: CallbackQuery):
         f"{pe('wallet')} Баланс: <b>{fg(db.get_user(uid)['gold'])} {pe('coin')}</b>",
         reply_markup=back_kb(),
     )
+
+
+# ---------- v12: уровни, кейсы, кланы, джекпот, витрина, дуэли ----------
+# Экономика: всё, что здесь списывается, сгорает или перераспределяется.
+# Новая Голда не печатается (только task/bonus/promo/topup как раньше).
+
+CLAN_NAME_AWAIT = {}   # uid -> ts: ожидание имени клана (10 минут)
+
+RARITY_RU = {"common": "общая", "rare": "редкая", "epic": "эпическая",
+             "legend": "легендарная"}
+
+
+@DP.callback_query(F.data == "lvl")
+async def cb_level(c: CallbackQuery):
+    uid = c.from_user.id
+    u = db.get_user(uid)
+    lv = u["level"] or 0
+    if lv >= len(db.LEVEL_COSTS):
+        await show(c,
+            f"{pe('crown')} <b>Уровень {lv} — максимум</b>\n\n"
+            "Твой профиль на вершине. Дальше — только легенды.",
+            reply_markup=kb([btn("Профиль", "profile", icon="wallet")]))
+        await c.answer()
+        return
+    cost = db.LEVEL_COSTS[lv]
+    owned = len(db.user_cosmetics(uid))
+    await show(c,
+        f"{pe('up')} <b>Уровень {lv} → {lv + 1}</b>\n\n"
+        f"Апгрейд стоит <b>{fg(cost)} {pe('coin')}</b> и сгорает навсегда. "
+        "Уровень — это престиж: он виден в профиле и в Витрине богатства.\n\n"
+        f"{pe('gem')} Косметики собрано: <b>{owned}</b>",
+        reply_markup=kb(
+            [btn(f"Улучшить · {fg(cost)} G", "lvl:up", icon="up")],
+            [btn("Профиль", "profile", icon="wallet")]))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "lvl:up")
+async def cb_level_up(c: CallbackQuery):
+    uid = c.from_user.id
+    ok, lv, cost = db.upgrade_level(uid)
+    if not ok:
+        if lv >= len(db.LEVEL_COSTS):
+            await c.answer("Уровень уже максимальный", show_alert=True)
+            return
+        await c.answer(f"Не хватает Голды: нужно {fg(cost)}", show_alert=True)
+        return
+    await c.answer(f"Уровень {lv}! {fg(cost)} G сгорели в славе", show_alert=True)
+    await _profile_banner(c)     # свежий профиль с новым уровнем
+
+
+def case_view(uid):
+    u = db.get_user(uid)
+    owned = db.user_cosmetics(uid)
+    pool_lines = "\n".join(
+        f"• {v} — <i>{RARITY_RU.get(r, r)}</i>"
+        for _, v, r, _ in db.CASE_POOL)
+    own_lines = ("\n".join(f"• {o['value']}" for o in owned[:10])
+                 or "Пока пусто — открой первый кейс.")
+    text = (
+        f"{pe('present')} <b>Мистический кейс</b>\n\n"
+        f"Цена: <b>{fg(db.CASE_COST)} {pe('coin')}</b> — сгорает при открытии.\n"
+        f"<blockquote expandable><b>Что может выпасть:</b>\n{pool_lines}</blockquote>\n\n"
+        f"{pe('gem')} <b>Твоя коллекция</b>\n{own_lines}\n\n"
+        f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>"
+    )
+    rows = [[btn(f"Открыть · {fg(db.CASE_COST)} G", "case:open", icon="present")],
+            [btn("Меню", "menu", icon="home")]]
+    return text, kb(*rows)
+
+
+@DP.callback_query(F.data == "case")
+async def cb_case(c: CallbackQuery):
+    await show(c, *case_view(c.from_user.id))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "case:open")
+async def cb_case_open(c: CallbackQuery):
+    uid = c.from_user.id
+    res, item, refund = db.open_case(uid)
+    if res == "poor":
+        await c.answer(f"Не хватает Голды: кейс стоит {fg(db.CASE_COST)}", show_alert=True)
+        return
+    if res == "dup":
+        await show(c,
+            f"{pe('sad')} <b>Дубликат</b>: {item[1]} у тебя уже есть.\n"
+            f"Вернул {fg(refund)} {pe('coin')} (остальное сгорело).",
+            reply_markup=kb([btn("Ещё кейс", "case:open", icon="present")],
+                            [btn("Меню", "menu", icon="home")]))
+        await c.answer("Дубликат — вернул 100 G")
+        return
+    await show(c,
+        f"{pe('party')} <b>Из кейса выпадает:</b>\n\n"
+        f"{pe('gem')} <b>{item[1]}</b>\n"
+        f"Редкость: <i>{RARITY_RU.get(item[2], item[2])}</i>",
+        reply_markup=kb([btn("Ещё кейс", "case:open", icon="present")],
+                        [btn("Коллекция", "case", icon="tasks")],
+                        [btn("Меню", "menu", icon="home")]))
+    await c.answer(f"Новинка: {item[1]}")
+
+
+def clan_view(uid):
+    mc = db.my_clan(uid)
+    week0 = int(time.time()) - 7 * 86400
+    top = db.clans_top(5, week0)
+    pool = db.clan_pool()
+    if mc:
+        text = (
+            f"{pe('people')} <b>Клан «{mc['name']}»</b>\n\n"
+            f"Участников: <b>{mc['members']}</b>\n"
+            f"Банк войны недели: <b>{fg(pool)} {pe('coin')}</b>\n\n"
+            "<blockquote>Недельный счёт клана — сумма выигрышей его игроков. "
+            "Победивший клан в понедельник делит банк войны поровну.</blockquote>"
+        )
+        rows = [[btn("Покинуть клан", "clan:leave", icon="cross")],
+                [btn("Меню", "menu", icon="home")]]
+        return text, kb(*rows)
+    top_lines = ("\n".join(
+        f"{i + 1}. {t['name']} — {fg(t['score'] or 0)} {pe('coin')} ({t['members']} чел.)"
+        for i, t in enumerate(top)) or "Кланов пока нет — создай первый!")
+    text = (
+        f"{pe('people')} <b>Кланы</b>\n\n"
+        f"{pe('crown')} <b>Топ недели</b>\n{top_lines}\n\n"
+        f"{pe('coin')} Создание клана — <b>{fg(db.CLAN_CREATE_COST)} G</b> (сгорает), "
+        f"вход — <b>{fg(db.CLAN_JOIN_COST)} G</b> (идёт в банк войны недели)."
+    )
+    rows = [[btn("Создать клан", "clan:new", icon="plus")]]
+    for t in top:
+        rows.append([btn(f"Вступить: {t['name']}", f"clan:join:{t['id']}", icon="people")])
+    rows.append([btn("Меню", "menu", icon="home")])
+    return text, kb(*rows)
+
+
+@DP.callback_query(F.data == "clan")
+async def cb_clan(c: CallbackQuery):
+    await show(c, *clan_view(c.from_user.id))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "clan:new")
+async def cb_clan_new(c: CallbackQuery):
+    CLAN_NAME_AWAIT[c.from_user.id] = time.time()
+    await show(c,
+        f"{pe('edit')} <b>Имя клана</b>\n\n"
+        f"Пришли название — от 3 до 24 символов. "
+        f"Списание <b>{fg(db.CLAN_CREATE_COST)} {pe('coin')}</b> произойдёт после имени.",
+        reply_markup=kb([btn("Отмена", "clan", icon="back")]))
+    await c.answer()
+
+
+@DP.message(F.chat.type == "private", F.text)
+async def clan_name_input(m: Message):
+    """Ввод имени клана: активен только в контексте «Создать клан» (10 мин).
+    Вне контекста — SkipHandler, чтобы работал основной парсер."""
+    ts = CLAN_NAME_AWAIT.get(m.from_user.id)
+    if not ts or time.time() - ts > 600:
+        raise SkipHandler
+    CLAN_NAME_AWAIT.pop(m.from_user.id, None)
+    db.upsert_user(m.from_user.id, m.from_user.username)
+    err = db.clan_create(m.from_user.id, m.text.strip())
+    if err:
+        await m.answer(f"{pe('warn')} {err}")
+        return
+    text, markup = clan_view(m.from_user.id)
+    await m.answer(f"{pe('party')} Клан создан!\n\n{text}", reply_markup=markup)
+
+
+@DP.callback_query(F.data.startswith("clan:join:"))
+async def cb_clan_join(c: CallbackQuery):
+    err = db.clan_join(c.from_user.id, int(c.data.split(":")[2]))
+    if err:
+        await c.answer(err, show_alert=True)
+        return
+    await c.answer(f"Ты в клане! Взнос {fg(db.CLAN_JOIN_COST)} G в банке войны")
+    await show(c, *clan_view(c.from_user.id))
+
+
+@DP.callback_query(F.data == "clan:leave")
+async def cb_clan_leave(c: CallbackQuery):
+    db.clan_leave(c.from_user.id)
+    await c.answer("Ты вышел из клана")
+    await show(c, *clan_view(c.from_user.id))
+
+
+@DP.callback_query(F.data == "jackpot")
+async def cb_jackpot(c: CallbackQuery):
+    await show(c,
+        f"{pe('gem')} <b>Глобальный джекпот</b>\n\n"
+        f"В банке: <b>{fg(db.jackpot_pool())} {pe('coin')}</b>\n\n"
+        "<blockquote>1% каждой ставки в любом чате копится здесь. Раз в сутки, "
+        "в 21:00, банк целиком уходит одному случайному игроку, игравшему "
+        "в последние сутки.</blockquote>",
+        reply_markup=kb([btn("Игры", "games", icon="games")],
+                        [btn("Меню", "menu", icon="home")]))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "topspent")
+async def cb_topspent(c: CallbackQuery):
+    rows = db.top_spent(10)
+    medals = [pe('trophy'), " 2.", " 3."]
+    lines = []
+    for i, r in enumerate(rows):
+        name = f"@{r['username']}" if r["username"] else f"ID {r['id']}"
+        mark = medals[i] if i < 3 else f" {i + 1}."
+        lines.append(f"{mark} {name} · сожжено {fg(r['spent'])} G · ур. {r['level'] or 0}")
+    body = "\n".join(lines) or "Пока никого — сожги Голду первым."
+    text = (
+        f"{pe('crown')} <b>Витрина богатства</b>\n\n{body}\n\n"
+        "<blockquote>Здесь — кто вложил больше всего Голды в уровни, кейсы, "
+        "кланы и товары. Тратить — тоже искусство.</blockquote>"
+    )
+    await show(c, text, reply_markup=kb([btn("Топ по Голде", "top", icon="trophy")],
+                                       [btn("Меню", "menu", icon="home")]))
+    await c.answer()
+
+
+# --- дуэли: вызов игрока на игру (голда ходит между игроками) ---
+
+DUEL_RE = re.compile(
+    r"^\s*/?(?:дуэль|дуель|duel)\s+([^\s]+)\s+([^\s]+)(?:\s+(@[\w_]+))?\s*$",
+    re.IGNORECASE)
+
+
+async def try_duel(m: Message):
+    """True — сообщение было дуэлью (обработано). False — парсер идёт дальше."""
+    mt = DUEL_RE.match(m.text or "")
+    if not mt:
+        return False
+    game = GAME_ALIASES.get(mt.group(1).lower())
+    if not game or game == "cube":
+        await safe_reply(m,
+            f"{pe('warn')} Дуэли: Футбол · Баскетбол · Боулинг · Дартс · Слоты.\n"
+            "Например: <b>дуэль футбол 100</b> ответом на сообщение соперника")
+        return True
+    stake = parse_amount_tok(mt.group(2))
+    if stake is None or stake == "all" or stake <= 0:
+        await safe_reply(m,
+            f"{pe('warn')} Ставку пиши числом: <b>дуэль футбол 100</b>")
+        return True
+    uid = m.from_user.id
+    target = None
+    if m.reply_to_message and m.reply_to_message.from_user:
+        tgt = m.reply_to_message.from_user
+        if not tgt.is_bot and tgt.id != uid:
+            target = tgt.id
+    elif mt.group(3):
+        uname = mt.group(3)[1:].lower()
+        row = db.one("SELECT id FROM users WHERE lower(username)=?", (uname,))
+        if not row:
+            await safe_reply(m, f"{pe('warn')} Не нашёл игрока {mt.group(3)} "
+                                "— пусть сначала запустит бота")
+            return True
+        target = row["id"]
+    if target is None:
+        await safe_reply(m,
+            f"{pe('warn')} Кому вызов? Ответь (reply) на сообщение соперника: "
+            "<b>дуэль футбол 100</b>")
+        return True
+    if m.chat.type != "private":          # лимиты группы действуют и на дуэли
+        g = db.get_group(m.chat.id)
+        if g:
+            if not g["games_on"]:
+                return False              # админ группы выключил игры — молча
+            if g["max_stake"] and stake > g["max_stake"]:
+                await safe_reply(m, f"{pe('warn')} В этой группе максимум ставки "
+                                    f"<b>{fg(g['max_stake'])}</b>")
+                return True
+            if stake < g["min_stake"]:
+                await safe_reply(m, f"{pe('warn')} В этой группе минимум ставки "
+                                    f"<b>{fg(g['min_stake'])}</b>")
+                return True
+    db.upsert_user(uid, m.from_user.username)
+    db.upsert_user(target, None)
+    did = db.create_duel(m.chat.id, game, stake, uid)
+    await m.reply(
+        f"{pe('bolt')} <b>Дуэль</b>: {GAME_CARDS[game][1]} на <b>{fg(stake)} {pe('coin')}</b>\n"
+        f"Банк <b>{fg(stake * 2)} {pe('coin')}</b>: победитель забирает 95%, "
+        f"5% — в джекпот.\nСоперник, жми кнопку — и бросаем кубик!",
+        reply_markup=kb([btn("Принять дуэль", f"duel:{did}", icon="bolt")]))
+    return True
+
+
+@DP.callback_query(F.data.startswith("duel:"))
+async def cb_duel(c: CallbackQuery):
+    did = int(c.data.split(":")[1])
+    d = db.get_duel(did)
+    if not d or d["status"] != "open":
+        await c.answer("Дуэль уже неактуальна", show_alert=True)
+        return
+    if c.from_user.id == d["p1"]:
+        await c.answer("Это твой вызов — жди соперника", show_alert=True)
+        return
+    if time.time() - d["created"] > 3600:
+        await c.answer("Дуэль истекла — создай новую", show_alert=True)
+        return
+    if not db.duel_accept(did, c.from_user.id):
+        await c.answer("Не хватает Голды на ставку", show_alert=True)
+        return
+    await c.answer("Дуэль принята!")
+    db.upsert_user(c.from_user.id, c.from_user.username)
+    emoji, pay_table = DICE_GAMES[d["game"]]
+    dice = await c.message.answer_dice(emoji=emoji)
+    await asyncio.sleep(2.8)
+    pay = pay_table.get(dice.dice.value, 0)
+    winner = d["p1"] if pay >= 1 else c.from_user.id
+    res = db.duel_resolve(did, winner)
+    pot, fee = res
+    db.track_game(d["p1"], winner == d["p1"],
+                  pot - fee - d["stake"] if winner == d["p1"] else 0)
+    db.track_game(c.from_user.id, winner == c.from_user.id,
+                  pot - fee - d["stake"] if winner == c.from_user.id else 0)
+    names = {d["p1"]: "Игрок 1", c.from_user.id: "Игрок 2"}
+    for aid in (d["p1"], c.from_user.id):
+        u = db.get_user(aid)
+        names[aid] = f"@{u['username']}" if u and u["username"] else f"ID {aid}"
+    await c.message.answer(
+        f"{pe('party')} <b>Дуэль окончена!</b>\n"
+        f"{pe('trophy')} Победил <b>{names[winner]}</b> — забрал "
+        f"<b>{fg(pot - fee)} {pe('coin')}</b>.\n"
+        f"{pe('gem')} {fg(fee)} {pe('coin')} ушли в джекпот.",
+    )
+    if m_chat := (d["chat_id"] != c.message.chat.id):
+        try:
+            await BOT.send_message(d["p1"],
+                f"{pe('bolt')} Твоя дуэль принята! Итог: "
+                + ("победа" if winner == d["p1"] else "поражение")
+                + f", банк {fg(pot - fee)} {pe('coin')}"
+                + (" — твои!" if winner == d["p1"] else ""))
+        except TelegramAPIError:
+            pass
+
+
+# --- фоновые тиражи: джекпот ежедневно, война кланов еженедельно ---
+
+async def jackpot_draw_loop():
+    """Суточный тираж джекпота: 21:00 по Ташкенту (UTC+5)."""
+    while True:
+        try:
+            now = int(time.time())
+            lt = time.gmtime(now + 5 * 3600)
+            day = time.strftime("%Y-%m-%d", lt)
+            if lt.tm_hour >= 21 and db.get_meta("jackpot_last") != day:
+                pool = db.jackpot_pool()
+                players = db.jackpot_active_players(now - 86400)
+                if pool >= 100 and players:
+                    win = random.choice(players)
+                    db.add_gold(win, pool, "jackpot")
+                    db.jackpot_set_pool(0)
+                    db.put_meta("jackpot_last", day)
+                    wu = db.get_user(win)
+                    name = (f"@{wu['username']}" if wu and wu["username"]
+                            else str(win))
+                    try:
+                        await BOT.send_message(
+                            win,
+                            f"{pe('gem')} <b>Джекпот твой!</b>\n\n"
+                            f"Банк дня <b>{fg(pool)} {pe('coin')}</b> целиком уходит тебе. "
+                            "Приятной игры!",
+                            parse_mode="HTML")
+                    except TelegramAPIError:
+                        pass
+                    await notify_admins(
+                        f"{pe('gem')} Джекпот дня {fg(pool)} G уходит {name} "
+                        f"({len(players)} активных в тираже)")
+                else:
+                    db.put_meta("jackpot_last", day)   # тираж дня прошёл, банк копится дальше
+        except Exception:
+            logging.exception("jackpot_draw_loop")
+        await asyncio.sleep(1800)
+
+
+async def clan_war_loop():
+    """Финал войны кланов: понедельник 00:00 по Ташкенту."""
+    while True:
+        try:
+            now = int(time.time())
+            lt = time.gmtime(now + 5 * 3600)
+            week = time.strftime("%Y-%W", lt)
+            if lt.tm_wday == 0 and db.get_meta("clan_last") != week:
+                res = db.clan_war_resolve(now - 7 * 86400)
+                db.put_meta("clan_last", week)
+                if res:
+                    winner, prize, members = res
+                    await notify_admins(
+                        f"{pe('crown')} Война кланов: победил «{winner['name']}» — "
+                        f"банк {fg(prize)} {pe('coin')} поделён между "
+                        f"{len(members)} участниками")
+                    try:
+                        await BOT.send_message(
+                            winner["owner"],
+                            f"{pe('party')} Твой клан «{winner['name']}» победил "
+                            f"в войне недели! Банк {fg(prize)} {pe('coin')} "
+                            "поделён между участниками.",
+                            parse_mode="HTML")
+                    except TelegramAPIError:
+                        pass
+        except Exception:
+            logging.exception("clan_war_loop")
+        await asyncio.sleep(3600)
 
 
 # ---------- пополнение через Telegram Stars ----------
@@ -1310,6 +1738,22 @@ def reference_pack():
            "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. "
            "Всем игрокам приходят уведомления.",
            f"{pe('crown')} Топ и Банк")
+        + "\n" + bq("Брось вызов: <b>дуэль футбол 100</b> ответом на сообщение "
+           "соперника (или «дуэль слоты 500 @ник»). Соперник принимает кнопкой, "
+           "кубик решает: победитель забирает 95% банка, 5% — в джекпот.",
+           f"{pe('bolt')} Дуэли")
+        + "\n" + bq("Кейс за 500 Голды: рамки для топа, цвета имени и легендарный "
+           "титул. Уровни профиля (100 → 50 000 G) сгорают навсегда и показывают "
+           "твой престиж.",
+           f"{pe('present')} Кейсы и уровни")
+        + "\n" + bq("Создай клан (1000 G) или вступи в чужой (100 G — в банк войны). "
+           "Счёт недели — сумма выигрышей игроков клана. Победивший клан делит "
+           "банк в понедельник.",
+           f"{pe('people')} Кланы и война недели")
+        + "\n" + bq("1% каждой ставки копится в джекпоте. В 21:00 банк целиком "
+           "уходит одному случайному игроку, игравшему за последние сутки. "
+           "Проверить банк: «джекпот».",
+           f"{pe('gem')} Джекпот")
         + "\n" + bq("В любом чате набери @funapp_game — всплывёт красивая карточка "
            "с твоей ссылкой для приглашения друзей.",
            f"{pe('app')} Инлайн-приглашение")
@@ -1517,6 +1961,8 @@ async def main():
                 logging.warning("heartbeat: %s", e)
             await asyncio.sleep(240)
     asyncio.create_task(heartbeat())
+    asyncio.create_task(jackpot_draw_loop())
+    asyncio.create_task(clan_war_loop())
     await DP.start_polling(BOT, allowed_updates=["message", "callback_query",
                                                "pre_checkout_query", "my_chat_member",
                                                "inline_query"])
@@ -1532,6 +1978,7 @@ async def main():
 # ---------- текстовые команды: одна таблица, расширяется строкой ----------
 TEXT_CMDS = {
     "баланс": "баланс", "б": "баланс", "голда": "баланс",
+    "джекпот": "джекпот", "витрина": "витрина", "клан": "клан",
     "профиль": "профиль", "я": "профиль", "проф": "профиль",
     "бонус": "бонус",
     "задания": "задания",
@@ -1695,6 +2142,22 @@ async def group_info(m: Message, uid, kind):
             lines.append(f"{mark} {tname} · {fg(t['gold'])} {pe('coin')}")
         body = "\n".join(lines) or "Пока никого — стань первым!"
         await safe_reply(m, f"{pe('trophy')} <b>Топ по Голде</b>\n\n{body}")
+    elif kind == "джекпот":
+        await safe_reply(m,
+            f"{pe('gem')} Джекпот: <b>{fg(db.jackpot_pool())} {pe('coin')}</b>\n"
+            "Тираж ежедневно в 21:00 — банк целиком одному активному игроку.")
+    elif kind == "витрина":
+        rows = db.top_spent(5)
+        lines = []
+        for i, r in enumerate(rows):
+            name = "@" + r["username"] if r["username"] else f"ID {r['id']}"
+            lines.append(f"{i + 1}. {name} — сожжено {fg(r['spent'])} G")
+        body = "\n".join(lines) or "Пока никого."
+        await safe_reply(m, f"{pe('crown')} <b>Витрина богатства</b>\n\n{body}")
+    elif kind == "клан":
+        await safe_reply(m,
+            f"{pe('people')} Кланы живут в личке бота — открой: https://t.me/{ME}\n"
+            "Создание клана, вступление и война недели — там.")
     elif kind == "бонус":
         now = int(time.time())
         left = BONUS_HOURS * 3600 - (now - u["last_bonus"])
@@ -2002,6 +2465,8 @@ async def text_cmd(m: Message):
         else:
             await m.reply(f"{pe('warn')} Такого промокода нет")
         return
+    if await try_duel(m):
+        return                          # дуэль: вызов соперника
     cmd = parse_group_cmd(m.text)
     if not cmd:
         return                          # обычная болтовня — молча
