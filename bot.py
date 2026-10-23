@@ -248,15 +248,23 @@ async def open_banner(c: CallbackQuery, url: str, text: str, reply_markup=None):
     """Экран с фирменным баннером: текст сообщения нельзя превратить в фото
     редактированием, поэтому старый экран убираем и присылаем баннер
     с подписью и кнопками. Подпись > 1024 — текст уходит следом."""
+    # v12.14: удаление старого экрана вынесено из общего try — в группе
+    # закреплённое/старое (>48ч) сообщение нельзя удалить, TelegramAPIError
+    # ловился общим except и фолбэк show() отправлял текст ЕЩЁ РАЗ отдельным
+    # сообщением (скрин 22:42). Теперь: фото+подпись единым пузырём,
+    # недоступное для удаления старое сообщение просто остаётся.
     try:
         if len(text) <= 1024:
             await c.message.answer_photo(url, caption=text, reply_markup=reply_markup)
         else:
             await c.message.answer_photo(url)
             await c.message.answer(text, reply_markup=reply_markup)
+    except TelegramAPIError:
+        return await show(c, text, reply_markup=reply_markup)
+    try:
         await c.message.delete()
     except TelegramAPIError:
-        await show(c, text, reply_markup=reply_markup)
+        pass          # старое/закреплённое сообщение удалить нельзя — не страшно
 
 
 async def show(c: CallbackQuery, text, reply_markup=None):

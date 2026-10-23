@@ -86,3 +86,21 @@ def test_case_screen_uses_case_banner():
     asyncio.run(b.cb_case(c))
     assert c.message.sent[0][0] == "photo"
     assert c.message.sent[0][1][0] == b.CASE_BANNER_URL
+
+
+def test_open_banner_no_duplicate_when_delete_fails():
+    """v12.14, скрин 22:42: старое сообщение не удаляется (группа, >48ч,
+    закреплённое) — НЕ должен отправляться текст повторно. Фото+подпись
+    единым пузырём, ошибка удаления проглатывается молча."""
+    from aiogram.exceptions import TelegramAPIError
+    class NoDeleteMsg(FakeCbMsg):
+        async def delete(self):
+            raise TelegramAPIError(method="deleteMessage", message="can't delete")
+    c = FakeCb()
+    c.message = NoDeleteMsg()
+    asyncio.run(b.cb_top(c))
+    kinds = [s[0] for s in c.message.sent]
+    assert kinds.count("text") == 0, f"лишнее текстовое сообщение: {kinds}"
+    assert kinds[0] == "photo", "баннер должен быть фото с подписью"
+    cap = c.message.sent[0][1][1]
+    assert "Топ по Голде" in cap, "текст должен быть подписью внутри фото"
