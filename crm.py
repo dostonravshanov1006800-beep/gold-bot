@@ -8,6 +8,7 @@ import json
 import logging
 import random
 import re
+import time
 
 from aiogram import F
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -358,8 +359,13 @@ def setup(ctx):
     def screen_exch():
         rate = db.stars_rate()
         pend = db.pending_exchanges()
+        hist = db.rate_history(4)
+        hist_s = " → ".join(
+            f"{fg(h['rate'])} ({time.strftime('%d.%m', time.gmtime(h['ts']))})"
+            for h in reversed(hist))
         lines = [f"{pe('stars')} <b>CRM · Обмен Голды на Stars</b>\n\n"
-                 f"Курс: <b>1 Star = {fg(rate)} G</b> (голда сгорает, Stars шлёт админ вручную)\n"]
+                 f"Курс: <b>1 Star = {fg(rate)} G</b> (голда сгорает, Stars шлёт админ вручную)\n"
+                 f"История курса: {hist_s}\n"]
         if pend:
             lines.append(f"{pe('inbox')} <b>Заявки:</b>")
             for e in pend:

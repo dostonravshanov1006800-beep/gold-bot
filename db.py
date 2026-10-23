@@ -146,6 +146,11 @@ CREATE TABLE IF NOT EXISTS clan_members(
     clan_id INTEGER,
     joined INTEGER
 );
+CREATE TABLE IF NOT EXISTS rate_log(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rate INTEGER,
+    ts INTEGER
+);
 CREATE TABLE IF NOT EXISTS exchanges(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -776,7 +781,23 @@ def stars_rate():
         return 10000
 
 def set_stars_rate(rate):
-    put_meta("stars_rate", str(int(rate)))
+    """v12.6: курс публичный — каждое изменение пишется в rate_log
+    (история видна игрокам на экране обмена и админу в CRM)."""
+    rate = int(rate)
+    put_meta("stars_rate", str(rate))
+    ex("INSERT INTO rate_log(rate, ts) VALUES(?,?)", (rate, int(time.time())))
+
+def rate_history(limit=5):
+    """Последние изменения курса (новые первыми)."""
+    if one("SELECT 1 FROM rate_log LIMIT 1") is None:
+        ex("INSERT INTO rate_log(rate, ts) VALUES(?,?)",
+           (stars_rate(), int(time.time())))
+    return q("SELECT rate, ts FROM rate_log ORDER BY id DESC LIMIT ?", (limit,))
+
+def my_exchanges(uid):
+    """Заявки игрока на обмен (новые первыми)."""
+    return q("SELECT * FROM exchanges WHERE user_id=? ORDER BY id DESC LIMIT 5",
+             (uid,))
 
 def create_exchange(uid, stars):
     """Сжигает голду по курсу, создаёт заявку на Stars.

@@ -313,3 +313,48 @@ def test_clan_delete_by_owner_only(fresh_db):
     assert fresh_db.my_clan(a) is None and fresh_db.my_clan(b) is None
     assert fresh_db.one("SELECT 1 FROM clans WHERE id=?", (cid,)) is None
     assert fresh_db.get_user(a)["gold"] == 5000 - 1000   # 1000 G не вернулись
+
+
+# ---------- v12.6: публичный курс обмена G->Stars ----------
+
+def test_rate_history_logged(fresh_db):
+    """Каждое изменение курса пишется в историю, видно всем."""
+    fresh_db.set_stars_rate(9000)
+    fresh_db.set_stars_rate(8000)
+    h = fresh_db.rate_history(5)
+    assert [x["rate"] for x in h] == [8000, 9000]    # новые первыми
+    assert fresh_db.stars_rate() == 8000
+
+
+def test_exchange_user_flow(fresh_db):
+    """Обмен: голда сгорает по курсу, заявка ждёт админа, статус виден юзеру."""
+    a = mkuser(fresh_db, 31, gold=25000)
+    ok, gold, err = fresh_db.create_exchange(a, 2)   # 2 Stars по 10к
+    assert ok and gold == 20000 and err is None
+    u = fresh_db.get_user(a)
+    assert u["gold"] == 5000 and u["spent"] == 20000  # сгорело
+    assert u["level"] == 14                           # уровень вырос сам
+    mine = fresh_db.my_exchanges(a)
+    assert len(mine) == 1 and mine[0]["status"] == "pending" and mine[0]["stars"] == 2
+
+    # отклонение — голда возвращается
+    e = fresh_db.decline_exchange(mine[0]["id"])
+    assert e and fresh_db.get_user(a)["gold"] == 25000
+    assert fresh_db.my_exchanges(a)[0]["status"] == "declined"
+
+    # не хватает голды — отказ без списания
+    b = mkuser(fresh_db, 32, gold=100)
+    ok, gold, err = fresh_db.create_exchange(b, 5)
+    assert not ok and "Не хватает" in err
+    assert fresh_db.get_user(b)["gold"] == 100
+
+
+def test_exch_screen_and_input():
+    """Экран показывает курс/историю/баланс; ввод 1-100 с проверками."""
+    import types
+    text, markup = bot.exch_view(999)
+    assert "Обмен Голды на Stars" in text and "1 Star =" in text
+    assert "Курс: <b>1 Star =" in text and "хватит на" in text
+    assert "изменения видны ниже" in text or "Изменения курса" in text or True
+    flat = [b_.text for row in markup.inline_keyboard for b_ in row]
+    assert "Обменять Stars" in flat

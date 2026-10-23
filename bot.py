@@ -212,7 +212,7 @@ def menu_kb(gold=0):
         [btn("Игры", "games", icon="games"), btn("Магазин", "shop", icon="shop")],
         [btn("Бонус", "bonus", icon="gift"), btn("Пополнить", "topup", icon="stars")],
         [btn("Кейс", "case", icon="present"), btn("Клан", "clan", icon="people")],
-        [btn("Топ", "top", icon="trophy")],
+        [btn("Обмен на Stars", "exch", icon="star"), btn("Топ", "top", icon="trophy")],
         [btn("Справочник", "refguide", icon="info")],
     )
 
@@ -1105,6 +1105,99 @@ async def cb_clan_new(c: CallbackQuery):
     await c.answer()
 
 
+# ---------- обмен Голды на Stars (v12.6: публичный курс) ----------
+
+EXCH_AWAIT = {}   # uid -> ts: ожидание количества Stars
+
+
+def exch_view(uid):
+    """v12.6: курс виден всем + история изменений + свои заявки."""
+    u = db.get_user(uid)
+    rate = db.stars_rate()
+    hist = db.rate_history(4)
+    lines = [f"{pe('star')} <b>Обмен Голды на Stars</b>\n",
+             f"Курс: <b>1 Star = {fg(rate)} G</b> — публичный, "
+             "изменения видны ниже.\n"]
+    if len(hist) > 1:
+        parts = [f"{fg(h['rate'])} G ({time.strftime('%d.%m', time.gmtime(h['ts']))})"
+                 for h in hist]
+        lines.append("Изменения курса: " + " → ".join(parts) + "\n")
+    gold = (u["gold"] or 0) if u else 0
+    lines.append(f"Твой баланс: <b>{fg(gold)} {pe('coin')}</b> — хватит на "
+                 f"~<b>{gold // rate} Stars</b>\n")
+    mine = db.my_exchanges(uid)
+    if mine:
+        st = {"pending": "ждёт админа", "done": "Stars получены",
+              "declined": "Голда возвращена"}
+        lines.append(f"{pe('inbox')} Твои заявки:")
+        for e in mine:
+            lines.append(f"#{e['id']} · {e['stars']} Stars · {st.get(e['status'], e['status'])}")
+        lines.append("")
+    lines.append(
+        "<blockquote>Голда сгорает сразу по курсу, заявка уходит админу — "
+        "Stars приходят от него вручную, обычно в течение дня. "
+        "Курс меняет админ, история изменений всегда перед глазами.</blockquote>")
+    return "\n".join(lines), kb(
+        [btn("Обменять Stars", "exch:go", icon="star")],
+        [btn("Пополнить", "topup", icon="stars"), btn("Меню", "menu", icon="home")])
+
+
+@DP.callback_query(F.data == "exch")
+async def cb_exch(c: CallbackQuery):
+    await show(c, *exch_view(c.from_user.id))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "exch:go")
+async def cb_exch_go(c: CallbackQuery):
+    rate = db.stars_rate()
+    EXCH_AWAIT[c.from_user.id] = time.time()
+    await show(c,
+        f"{pe('star')} <b>Сколько Stars обменять?</b>\n\n"
+        "Пришли целое число от 1 до 100.\n"
+        f"Цена: <b>1 Star = {fg(rate)} G</b> — спишется сразу, "
+        "Stars придёт от админа.\n"
+        "Пример: <b>5</b>",
+        reply_markup=kb([btn("Отмена", "exch", icon="back")]))
+    await c.answer()
+
+
+@DP.message(F.chat.type == "private", F.text)
+async def exch_amount_input(m: Message):
+    """Ввод количества Stars при обмене (v12.6). Активен только в контексте
+    «Обменять Stars» (10 мин), остальное — SkipHandler."""
+    ts = EXCH_AWAIT.get(m.from_user.id)
+    if not ts or time.time() - ts > 600:
+        raise SkipHandler
+    raw = (m.text or "").strip().split()[0] if (m.text or "").strip() else ""
+    try:
+        stars = int(raw)
+    except ValueError:
+        stars = 0
+    if not (1 <= stars <= 100):
+        EXCH_AWAIT[m.from_user.id] = time.time()   # можно прислать ещё раз
+        await m.answer(
+            f"{pe('warn')} Пришли целое число от 1 до 100 — например, <b>5</b>.",
+            parse_mode="HTML")
+        return
+    EXCH_AWAIT.pop(m.from_user.id, None)
+    db.upsert_user(m.from_user.id, m.from_user.username)
+    ok, gold, err = db.create_exchange(m.from_user.id, stars)
+    if not ok:
+        await m.answer(f"{pe('warn')} {err}", parse_mode="HTML")
+        return
+    u = db.get_user(m.from_user.id)
+    un = "@" + u["username"] if u and u["username"] else str(m.from_user.id)
+    await notify_admins(
+        f"{pe('inbox')} Заявка на обмен: {un} — {fg(gold)} G → {stars} Stars. "
+        "Выдай Stars: CRM → Обмен G→Stars.")
+    ev_text, ev_markup = exch_view(m.from_user.id)
+    await m.answer(
+        f"{pe('party')} Заявка принята: <b>{stars} Stars</b> за {fg(gold)} G.\n\n"
+        f"{ev_text}",
+        reply_markup=ev_markup, parse_mode="HTML")
+
+
 @DP.message(F.chat.type == "private", F.text)
 async def clan_name_input(m: Message):
     """Ввод ссылки группы при создании клана (v12.4): принимается ТОЛЬКО
@@ -1819,6 +1912,12 @@ def reference_pack():
            "10 Stars → 110 G (+10%) · 25 Stars → 300 G (+20%) · 50 Stars → 650 G (+30%). "
            "Своя сумма — любая.",
            f"{pe('star')} Пополнение")
+        + "\n" + bq(f"Меню → <b>Обмен на Stars</b>: курс публичный — "
+           f"<b>1 Star = {fg(db.stars_rate())} G</b>, история изменений "
+           "показана на экране.\n"
+           "Голда сгорает сразу по текущему курсу, заявка уходит админу, "
+           "Stars приходят от него вручную.",
+           f"{pe('stars')} Обмен на Stars")
         + "\n" + bq("В любой группе с ботом: reply на сообщение человека + сумма — "
            "«держи 5000», «тебе 1 500 000», «5к», «2кк», «+250000». "
            "Получателю — уведомление в личку.",
