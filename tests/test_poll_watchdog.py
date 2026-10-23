@@ -1,6 +1,6 @@
 """v12.8: сторож слуха бота (polling_watchdog)."""
 import os, sys, time, asyncio, importlib.util
-os.environ.update(BOT_TOKEN="1:test", ADMIN_IDS="1", PREMIUM_UI="1")
+os.environ.update(BOT_TOKEN="1:test", PREMIUM_UI="1")
 spec = importlib.util.spec_from_file_location("botmod", os.path.join(os.path.dirname(__file__), "..", "bot.py"))
 b = importlib.util.module_from_spec(spec); sys.modules["botmod"] = b
 spec.loader.exec_module(b)

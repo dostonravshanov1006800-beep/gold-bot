@@ -56,6 +56,7 @@ PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files
 GAMES_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6fff4abbf_bdcd06513_IMG_20261023_132641_866.jpg"  # баннер «Игры»
 TOPUP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/10ba5c184_8d5d53a1c_IMG_20261023_153401_183.jpg"  # баннер «Пополнить»
 SHOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/33e9be752_ccab4d553_IMG_20261023_153353_579.jpg"  # баннер «Магазин»
+REF_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/bd3bb2314_ref_banner.jpg"  # баннер «Справочник» (v12.10)
 BONUS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/e2ce684be_bonus_banner.jpg"  # баннер «Бонусы»
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
@@ -879,9 +880,11 @@ async def cb_refcopy(c: CallbackQuery):
 
 @DP.callback_query(F.data == "refguide")
 async def cb_refguide(c: CallbackQuery):
-    """Справочник всех функций: через show() — работает и на фото-баннере
-    /start (edit_text на фото падает, кнопка «зависала»; 22.10, 20:47)."""
-    await show(c, reference_pack(), reply_markup=back_kb())
+    """Справочник всех функций (v12.10): фирменный баннер + раскрываемые
+    цитаты. open_banner сам шлёт фото, длинный текст следом и убирает
+    старый экран (edit_text на фото падал; 22.10)."""
+    await open_banner(c, REF_BANNER_URL, reference_pack(),
+                      reply_markup=back_kb())
     await c.answer()
 
 
@@ -1911,14 +1914,18 @@ async def cmd_bonus(m: Message):
 async def cmd_plays(m: Message):
     db.upsert_user(m.from_user.id, m.from_user.username)
     u = db.get_user(m.from_user.id)
-    await _open_screen(m,
-        f"{pe('games')} <b>Игры</b> · баланс <b>{fg(u['gold'])} {pe('coin')}</b>\n\n"
-        "Выбери игру: откроется описание и ставки.\n"
-        "В группах играй текстом, например <b>Футбол 100</b>.",
-        kb([btn("Футбол", "g:football", icon="ball"), btn("Баскетбол", "g:basketball")],
-           [btn("Боулинг", "g:bowling"), btn("Кубы", "g:cubes", icon="cube")],
-           [btn("Дартс", "g:dart", icon="target"), btn("Слоты", "g:slots", icon="spin")],
-           [btn("Меню", "menu", icon="home")]))
+    caption = (f"{pe('games')} <b>Игры</b> · баланс <b>{fg(u['gold'])} {pe('coin')}</b>\n\n"
+               "Выбери игру: откроется описание и ставки.\n"
+               "В группах играй текстом, например <b>Футбол 100</b>.")
+    markup = kb([btn("Футбол", "g:football", icon="ball"), btn("Баскетбол", "g:basketball")],
+                [btn("Боулинг", "g:bowling"), btn("Кубы", "g:cubes", icon="cube")],
+                [btn("Дартс", "g:dart", icon="target"), btn("Слоты", "g:slots", icon="spin")],
+                [btn("Меню", "menu", icon="home")])
+    try:                                    # v12.10: баннер «Игры» и в команде
+        await m.answer_photo(GAMES_BANNER_URL, caption=caption,
+                             reply_markup=markup, parse_mode="HTML")
+    except TelegramAPIError:
+        await m.answer(caption, reply_markup=markup, parse_mode="HTML")
 
 
 @DP.message(Command("referrals"), F.chat.type == "private")
@@ -2027,6 +2034,11 @@ async def cmd_help(m: Message):
     text = reference_pack()
     if adm:
         text += f"\n\n{pe('robot')} Админ: /admin"
+    try:                                    # v12.10: баннер справочника
+        if REF_BANNER_URL:
+            await m.answer_photo(REF_BANNER_URL)
+    except TelegramAPIError:
+        pass
     await _open_screen(m, text, back_kb())
 
 # ---------- CRM-админка внутри бота ----------

@@ -1,6 +1,6 @@
 """v12.9: слэш-команды не глотаются вводами + чистка мусорных кланов."""
 import os, sys, time, asyncio, importlib.util
-os.environ.update(BOT_TOKEN="1:test", ADMIN_IDS="1", PREMIUM_UI="1")
+os.environ.update(BOT_TOKEN="1:test", PREMIUM_UI="1")
 _dir = os.path.dirname(__file__)
 spec = importlib.util.spec_from_file_location(
     "botmod", os.path.join(_dir, "..", "bot.py"))
