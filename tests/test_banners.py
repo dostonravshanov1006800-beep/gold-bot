@@ -12,6 +12,7 @@ class FakeMsg:
     def __init__(self, uid=777):
         from types import SimpleNamespace
         self.from_user = SimpleNamespace(id=uid, username=None)
+        self.chat = SimpleNamespace(id=uid, type="private")   # v12.15: swap-экраны
         self.sent = []          # ('photo'|'text', payload)
     async def answer(self, text=None, **k): self.sent.append(("text", text))
     async def answer_photo(self, photo=None, caption=None, **k):
@@ -104,3 +105,77 @@ def test_open_banner_no_duplicate_when_delete_fails():
     assert kinds[0] == "photo", "баннер должен быть фото с подписью"
     cap = c.message.sent[0][1][1]
     assert "Топ по Голде" in cap, "текст должен быть подписью внутри фото"
+
+
+# ---------- v12.15: один живой экран на чат ----------
+
+class FakeChat:
+    def __init__(self, cid=777, ctype="private"):
+        self.id, self.type = cid, ctype
+
+class SentMsg:
+    def __init__(self, mid): self.message_id = mid
+
+class SwapMsg:
+    """Сообщение из ЛС: answer/answer_photo возвращают SentMsg."""
+    def __init__(self, cid=777):
+        from types import SimpleNamespace
+        self.chat = FakeChat(cid)
+        self.from_user = SimpleNamespace(id=cid, username=None)
+        self._n = 5000
+    async def answer(self, text=None, **k):
+        self._n += 1; return SentMsg(self._n)
+    async def answer_photo(self, photo=None, caption=None, **k):
+        self._n += 1; return SentMsg(self._n)
+
+class FakeBotApi:
+    def __init__(self): self.deleted = []
+    async def delete_message(self, cid, mid): self.deleted.append((cid, mid))
+
+def test_commands_swap_screens():
+    """v12.15: /bonus потом /plays — экран /bonus удаляется,
+    запоминается новый. В личке всегда один живой экран."""
+    m = SwapMsg()
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        b.db.put_meta("screen:777", "111,222")
+        asyncio.run(b.cmd_bonus(m))
+        assert (777, 111) in api.deleted and (777, 222) in api.deleted, \
+            "прошлые экраны должны удаляться"
+        v = b.db.get_meta("screen:777")
+        assert v and "111" not in v, f"экран перезаписан, а не дописан: {v}"
+        asyncio.run(b.cmd_plays(m))
+        v2 = b.db.get_meta("screen:777")
+        assert v2 != v, "новая команда перезаписала экран"
+        assert b.db.get_meta("screen:777").count(",") == 0, \
+            "одна команда = один экран-баннер"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+
+def test_help_swaps_and_tracks_two_messages():
+    """v12.15: /help = баннер + текст, оба помнятся, старые удаляются."""
+    m = SwapMsg()
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        b.db.put_meta("screen:777", "999")
+        asyncio.run(b.cmd_help(m))
+        assert (777, 999) in api.deleted
+        v = b.db.get_meta("screen:777")
+        assert v.count(",") == 1, f"баннер+текст = два id: {v}"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+
+def test_groups_do_not_delete_screens():
+    """В группе экраны разных игроков — ничего не удаляем и не помним."""
+    from types import SimpleNamespace
+    m = SwapMsg(); m.chat = FakeChat(-100, "supergroup")
+    api = FakeBotApi(); real_bot = b.BOT; b.BOT = api
+    try:
+        b.db.put_meta("screen:-100", "111")
+        asyncio.run(b.cmd_balance(m))
+        assert api.deleted == [], "в группах удаление запрещено"
+    finally:
+        b.BOT = real_bot
+        b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")

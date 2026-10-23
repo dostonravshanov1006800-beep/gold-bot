@@ -255,10 +255,12 @@ async def open_banner(c: CallbackQuery, url: str, text: str, reply_markup=None):
     # недоступное для удаления старое сообщение просто остаётся.
     try:
         if len(text) <= 1024:
-            await c.message.answer_photo(url, caption=text, reply_markup=reply_markup)
+            sent = await c.message.answer_photo(url, caption=text, reply_markup=reply_markup)
+            await _screen_remember(c.message, sent)
         else:
-            await c.message.answer_photo(url)
-            await c.message.answer(text, reply_markup=reply_markup)
+            sent1 = await c.message.answer_photo(url)
+            sent2 = await c.message.answer(text, reply_markup=reply_markup)
+            await _screen_remember(c.message, sent1, sent2)
     except TelegramAPIError:
         return await show(c, text, reply_markup=reply_markup)
     try:
@@ -352,13 +354,15 @@ async def cmd_start(m: Message, command: CommandStart):
     except TelegramAPIError:
         pass
     text = welcome_text(m.from_user.first_name or "друг", referrer)
+    await _screen_forget(m)
     if BANNER_URL:
-        await m.answer_photo(
+        sent = await m.answer_photo(
             BANNER_URL, caption=text,
             reply_markup=menu_kb(u["gold"]),
         )
     else:
-        await m.answer(text, reply_markup=menu_kb(u["gold"]))   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
+        sent = await m.answer(text, reply_markup=menu_kb(u["gold"]))
+    await _screen_remember(m, sent)   # /start: баннер + приветствие + полное меню кнопок (Задания/Профиль/
         # Игры/Магазин/Бонус/Пополнить/Топ/Справочник)
         # В группах меню не нужно: там всё работает текстом («футбол 100»).
 
@@ -1891,8 +1895,36 @@ async def cmd_stats(m: Message):
 
 # ---------- слэш-команды (меню «Меню» в Telegram) ----------
 
+# ---------- v12.15: один живой экран на чат ----------
+# Кнопочная навигация уже заменяет экраны на месте. Команды же (/help,
+# /bonus, /plays...) раньше сыпали новый экран поверх старого. Теперь
+# в личке бот помнит id сообщений-экранов и удаляет прошлые перед
+# отправкой нового: в чате всегда один живой экран.
+# В группах НЕ применяется: там экраны принадлежат разным игрокам.
+
+async def _screen_forget(m: Message):
+    """Удалить прошлый экран-команды этого чата (id из meta)."""
+    if m.chat.type != "private":
+        return
+    v = db.get_meta(f"screen:{m.chat.id}") or ""
+    for mid in [x for x in v.split(",") if x]:
+        try:
+            await BOT.delete_message(m.chat.id, int(mid))
+        except TelegramAPIError:
+            pass          # уже удалён / старше 48ч — не страшно
+    db.put_meta(f"screen:{m.chat.id}", "")
+
+async def _screen_remember(m, *sent):
+    """Запомнить id сообщений нового экрана (только личка)."""
+    if m.chat.type != "private":
+        return
+    db.put_meta(f"screen:{m.chat.id}",
+                ",".join(str(s.message_id) for s in sent if s))
+
 async def _open_screen(m: Message, text, markup):
-    await m.answer(text, reply_markup=markup)
+    await _screen_forget(m)
+    sent = await m.answer(text, reply_markup=markup)
+    await _screen_remember(m, sent)
 
 
 @DP.message(Command("balance"), F.chat.type == "private")
@@ -1911,13 +1943,15 @@ async def cmd_bonus(m: Message):
     db.upsert_user(uid, m.from_user.username)
     ok = db.claim_bonus(uid, int(time.time()), BONUS_HOURS * 3600, BONUS_GOLD)
     text, markup = bonus_view(uid, just_claimed=ok)
+    await _screen_forget(m)
     try:
-        await m.answer_photo(
+        sent = await m.answer_photo(
             BONUS_BANNER_URL,
             caption=f"{pe('gift')} <b>Бонусы</b>\n\n{text}",
             reply_markup=markup, parse_mode="HTML")
     except TelegramAPIError:
-        await m.answer(text, reply_markup=markup, parse_mode="HTML")
+        sent = await m.answer(text, reply_markup=markup, parse_mode="HTML")
+    await _screen_remember(m, sent)
 
 
 @DP.message(Command("plays"), F.chat.type == "private")
@@ -1931,11 +1965,13 @@ async def cmd_plays(m: Message):
                 [btn("Боулинг", "g:bowling"), btn("Кубы", "g:cubes", icon="cube")],
                 [btn("Дартс", "g:dart", icon="target"), btn("Слоты", "g:slots", icon="spin")],
                 [btn("Меню", "menu", icon="home")])
+    await _screen_forget(m)                 # v12.15: прошлый экран вон
     try:                                    # v12.10: баннер «Игры» и в команде
-        await m.answer_photo(GAMES_BANNER_URL, caption=caption,
-                             reply_markup=markup, parse_mode="HTML")
+        sent = await m.answer_photo(GAMES_BANNER_URL, caption=caption,
+                                    reply_markup=markup, parse_mode="HTML")
     except TelegramAPIError:
-        await m.answer(caption, reply_markup=markup, parse_mode="HTML")
+        sent = await m.answer(caption, reply_markup=markup, parse_mode="HTML")
+    await _screen_remember(m, sent)
 
 
 @DP.message(Command("referrals"), F.chat.type == "private")
@@ -2044,12 +2080,15 @@ async def cmd_help(m: Message):
     text = reference_pack()
     if adm:
         text += f"\n\n{pe('robot')} Админ: /admin"
-    try:                                    # v12.10: баннер справочника
+    await _screen_forget(m)                 # v12.15: прошлый экран вон
+    banner = None                           # v12.10: баннер справочника
+    try:
         if REF_BANNER_URL:
-            await m.answer_photo(REF_BANNER_URL)
+            banner = await m.answer_photo(REF_BANNER_URL)
     except TelegramAPIError:
-        pass
-    await _open_screen(m, text, back_kb())
+        banner = None
+    sent = await m.answer(text, reply_markup=back_kb())
+    await _screen_remember(m, banner, sent)
 
 # ---------- CRM-админка внутри бота ----------
 import crm
