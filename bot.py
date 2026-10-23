@@ -797,7 +797,6 @@ async def cb_balance(c: CallbackQuery):
     await c.answer()
 
 
-@DP.callback_query(F.data == "profile")
 def profile_payload(uid, u=None):
     u = u or db.get_user(uid)
     n = db.invited_count(uid)
@@ -2200,15 +2199,26 @@ async def polling_watchdog():
                 "polling восстановлен.")
         except Exception:
             pass
-    for _ in range(2):
+    # v12.11: уронил 23.10 в 20:52 — два зонда с паузой 0.2с попадали
+    # в 11-секундную щель реконнекта aiogram при передаче эстафеты между
+    # ранами, и сторож убил ЖИВОЙ процесс. Теперь: 3 зонда с паузой 30с
+    # (щель реконнекта не живёт дольше пары секунд); 409 на любом зонде =
+    # поллер жив, выходим сразу.
+    for i in range(3):
+        conflict = False
         try:
-            await BOT.get_updates(timeout=0)
-            await asyncio.sleep(0.2)   # щель между поллами маловероятна, но проверим дважды
-        except TelegramAPIError:
+            await BOT.get_updates(timeout=0)   # успех = конфликта нет
+        except TelegramAPIError:               # 409: конфликт с живым поллером
+            conflict = True
             db.put_meta("poll_ok", str(int(time.time())))
-            return                     # 409: конфликт с живым поллером
+            return
+        if i < 2:
+            await asyncio.sleep(30)
     db.put_meta("poll_dead", str(int(time.time())))
-    logging.critical("polling мёртв (getUpdates без конфликта 2 раза) — перезапуск")
+    logging.critical("polling мёртв (3 зонда по 30с без конфликта) — перезапуск")
+    # поллер мёртв, спешить некуда: даём git-синхрону 50с закоммитить
+    # poll_dead в репо (иначе после смерти метка терялась), потом рестарт
+    await asyncio.sleep(50)
     os._exit(1)
 
 async def main():

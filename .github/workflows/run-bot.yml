@@ -37,6 +37,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_RUN_ID: ${{ github.run_id }}
         run: |
+          # v12.11: GitHub Actions запускает степ с set -e — любой ненулевой
+          # выход питона убивал ЦЕЛЫЙ степ до цикла, супервизор не работал
+          # (инцидент 23.10 20:52: бот упал и никто его не поднял).
+          set +e
           while true; do
             python bot.py
             code=$?

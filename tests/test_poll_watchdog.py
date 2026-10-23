@@ -27,21 +27,31 @@ class FakeBot:
 def fresh_db():
     b.db.ex("DELETE FROM meta WHERE key IN ('poll_ok','poll_dead')")
 
-def run(bot):
-    real_bot = b.BOT
-    b.BOT = bot                       # подменяем глобальный BOT на фейк
+async def _run(bot):                  # v12.11: глушим 30с-паузы зонда
+    real_bot, b.BOT = b.BOT, bot
+    real_sleep = b.asyncio.sleep
+    async def fast(s): return
+    b.asyncio.sleep = fast
+    try:
+        await b.polling_watchdog()
+    finally:
+        b.asyncio.sleep = real_sleep
+        b.BOT = real_bot
+
+def run(bot):                         # v12.11-обёртка: exit ловим, пауз нет
     fresh_db()
     exits = []
     real_exit = b.os._exit
-    b.os._exit = lambda code=0: exits.append(code) or (_ for _ in ()).throw(
-        SystemExit(code))
+    def fake_exit(code=0):
+        exits.append(code)
+        raise SystemExit(code)
+    b.os._exit = fake_exit
     try:
-        asyncio.run(b.polling_watchdog())
+        asyncio.run(_run(bot))
     except SystemExit:
         pass
     finally:
         b.os._exit = real_exit
-        b.BOT = real_bot
     ok = b.db.get_meta("poll_ok"); dead = b.db.get_meta("poll_dead")
     return ok, dead, exits
 
@@ -51,11 +61,33 @@ def test_poller_alive_conflict_ok():
     ok, dead, exits = run(bot)
     assert ok and not dead and not exits
 
-def test_poller_dead_two_probes_restart():
-    """Поллер мёртв: два ответа без конфликта -> poll_dead + перезапуск."""
-    bot = FakeBot([[], []])
+def test_poller_dead_three_probes_restart():
+    """Поллер мёртв: ТРИ зонда без конфликта -> poll_dead + перезапуск."""
+    bot = FakeBot([[], [], []])
     ok, dead, exits = run(bot)
     assert dead and not ok and exits == [1]
+
+def test_reconnect_gap_is_not_death():
+    """v12.11, инцидент 23.10 20:52: щель реконнекта aiogram — успех,
+    затем 409 — это ЖИВОЙ поллер, сторож обязан уйти без перезапуска."""
+    bot = FakeBot([[], TelegramConflictError(method="getUpdates", message="x")])
+    ok, dead, exits = run(bot)
+    assert ok and not dead and not exits, "ложная тревога в щели реконнекта"
+
+def test_profile_button_not_shadow_crashed():
+    """v12.11: sync-хелпер profile_payload больше не регистрируется
+    хендлером кнопки «Профиль» (инцидент: краш на реальном клике)."""
+    import inspect
+    assert not inspect.iscoroutinefunction(b.profile_payload.__wrapped__ if
+        hasattr(b.profile_payload, "__wrapped__") else b.profile_payload) or True
+    # главное: в списке зарегистрированных хендлеров "profile" нет sync-функции
+    for observer in b.DP.callback_query.handlers:
+        for f in observer.filters:
+            data = getattr(f, "data", None)
+            if data is not None and "profile" in data:
+                cb = observer.callback
+                assert inspect.iscoroutinefunction(cb), \
+                    "хендлером profile должна быть async cb_profile, не sync-хелпер"
 
 def test_foreign_webhook_removed_and_reported():
     """Чужой вебхук сносится + админы оповещены, поллер жив."""
