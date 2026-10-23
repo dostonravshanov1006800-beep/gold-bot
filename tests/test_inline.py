@@ -41,7 +41,7 @@ def test_inline_card_has_photo_caption_reflink():
     card = results[0]
     assert card.type == "photo"
     assert card.photo_url and card.photo_url.startswith("https://")
-    assert "Funs" in card.caption and "Голду" in card.caption
+    assert "Funapp" in card.caption and "Голду" in card.caption
     url = card.reply_markup.inline_keyboard[0][0].url
     assert url == "https://t.me/funapp_game?start=ref_42"
     assert kw.get("is_personal") is True and kw.get("cache_time") == 0
@@ -69,7 +69,7 @@ def test_btn_url_and_switch_inline():
 def test_inline_in_allowed_updates():
     """Регресс 22.10: без inline_query в allowed_updates карточка не работает."""
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot.py")).read()
-    assert '"inline_query"' in src.split("start_polling")[1][:300]
+    assert '"inline_query"' in src.split("DP.start_polling")[1][:300]
 
 
 def test_banner_url_is_direct_no_redirect():

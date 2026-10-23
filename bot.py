@@ -2164,6 +2164,35 @@ def git_sync_loop():
 
 # ---------- запуск ----------
 
+async def polling_watchdog():
+    """v12.8: сторож слуха бота. 1) На этом боте polling — чужой вебхук
+    (инцидент 23.10: вебхук gold-bandito случайно встал на @funapp_game,
+    Telegram запретил getUpdates, бот оглох при живом heartbeat) сносим
+    сразу. 2) getUpdates(timeout=0) изнутри обязан получить 409-конфликт
+    с собственным поллером; два ответа подряд без конфликта = поллер
+    мёртв — перезапускаем процесс (workflow поднимет бота через 10с)."""
+    wi = await BOT.get_webhook_info()
+    if wi.url:
+        await BOT.delete_webhook(drop_pending_updates=False)
+        logging.critical("heartbeat снёс чужой вебхук: %s", wi.url)
+        try:
+            await notify_admins(
+                f"{pe('warn')} Внимание: на боте был чужой вебхук ({wi.url}) — "
+                "бот мог не слышать пользователей. Вебхук снесён автоматически, "
+                "polling восстановлен.")
+        except Exception:
+            pass
+    for _ in range(2):
+        try:
+            await BOT.get_updates(timeout=0)
+            await asyncio.sleep(0.2)   # щель между поллами маловероятна, но проверим дважды
+        except TelegramAPIError:
+            db.put_meta("poll_ok", str(int(time.time())))
+            return                     # 409: конфликт с живым поллером
+    db.put_meta("poll_dead", str(int(time.time())))
+    logging.critical("polling мёртв (getUpdates без конфликта 2 раза) — перезапуск")
+    os._exit(1)
+
 async def main():
     global ME
     if not BOT_TOKEN:
@@ -2206,13 +2235,28 @@ async def main():
         threading.Thread(target=self_renew_loop, daemon=True).start()
     # Сердцебиение: раз в 4 минуты пишем метку в базу. По коммитам bot.db в репо
     # извне видно, жив ли бот (git_sync_loop коммитит только при изменениях базы).
+
+
+
     async def heartbeat():
+        # v12.8: heartbeat проверяет не только «жив ли процесс», но и
+        # «слышит ли бот»: чужой вебхук (инцидент 23.10 с gold-bandito)
+        # или мёртвый polling делали бота глухим при живом heartbeat.
+        first = True
         while True:
             try:
                 db.put_meta("heartbeat", str(int(time.time())))
                 db.prune_old()
             except Exception as e:
                 logging.warning("heartbeat: %s", e)
+            if first:
+                first = False          # даём start_polling подняться
+                await asyncio.sleep(90)
+                continue
+            try:
+                await polling_watchdog()
+            except Exception as e:
+                logging.warning("heartbeat watchdog: %s", e)
             await asyncio.sleep(240)
     asyncio.create_task(heartbeat())
     asyncio.create_task(jackpot_draw_loop())
