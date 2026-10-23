@@ -85,21 +85,21 @@ CUSTOM_TOPUP = {}   # uid -> timestamp ожидания свободной су�
 # выглядят голом/попаданием: текст обязан совпадать с анимацией Telegram.
 # WIN_TEXT: value -> фраза победы; FAIL_TEXT: value -> фраза промаха.
 WIN_TEXT = {
-    "football":   {3: "⚽ ГОЛ! Мяч в сетке!", 4: "⚽ ГОЛ! В самый угол!",
-                   5: "⚽ ГОЛ! Прямо в девятку!"},
-    "basketball": {4: "🏀 ПОПАДАНИЕ! С щитком!", 5: "🏀 ПОПАДАНИЕ! Чисто в кольцо!"},
-    "bowling":    {6: "🎳 СТРАЙК! Все кегли разлетелись!"},
-    "dart":       {6: "🎯 В ЯБЛОЧКО! Точно в десятку!"},
-    "slots":      {1: "🎰 ДЖЕКПОТ! БАРЫ В РЯД!", 2: "🎰 ТРИ В РЯД!", 3: "🎰 ТРИ В РЯД!",
-                   4: "🎰 ТРИ В РЯД!", 22: "🎰 ПАРА! Почти джекпот!", 43: "🎰 ПАРА! Почти джекпот!"},
+    "football":   {3: "Гол! Мяч в сетке", 4: "Гол! Точно в угол",
+                   5: "Гол! Прямо в девятку"},
+    "basketball": {4: "Попадание! С щитка", 5: "Попадание! Чисто в кольцо"},
+    "bowling":    {6: "Страйк! Все кегли разлетелись"},
+    "dart":       {6: "В яблочко! Точно в десятку"},
+    "slots":      {1: "Джекпот! Бары в ряд", 2: "Три в ряд", 3: "Три в ряд",
+                   4: "Три в ряд", 22: "Пара! Почти джекпот", 43: "Пара! Почти джекпот"},
 }
 FAIL_TEXT = {
-    "football":   {1: "Мимо — выше ворот!", 2: "Вратарь вытащил..."},
-    "basketball": {1: "Мимо кольца...", 2: "Не долетел...", 3: "С кольца — и отскочил!"},
-    "bowling":    {1: "Срыв в канаву!", 2: "Зацепил пару кеглей...", 3: "Кегли почти устояли...",
-                   4: "Кегли почти устояли...", 5: "Девятая кегля устояла!"},
-    "dart":       {1: "Мимо доски!", 2: "Край доски — мимо...", 3: "Внешний круг...",
-                   4: "Внешний круг...", 5: "Почти десятка — рядом!"},
+    "football":   {1: "Мимо — чуть выше ворот", 2: "Вратарь вытащил мяч"},
+    "basketball": {1: "Мимо кольца", 2: "Мяч не долетел", 3: "Отскок от кольца"},
+    "bowling":    {1: "Шар ушёл в канаву", 2: "Зацепил пару кеглей", 3: "Кегли почти устояли",
+                   4: "Кегли почти устояли", 5: "Последняя кегля устояла"},
+    "dart":       {1: "Мимо доски", 2: "Самый край доски", 3: "Внешний круг",
+                   4: "Внешний круг", 5: "Рядом с десяткой"},
     "slots":      {},
 }
 
@@ -221,8 +221,8 @@ def welcome_text(name, referrer=None):
     via = f"\n{pe('people')} Пригласил: <b>@{referrer}</b>\n" if referrer else ""
     return (
         f"{pe('wave')} Привет, <b>{name}</b>!{via}\n"
-        f"<blockquote>Зарабатывай <b>Голду</b> {pe('coin')} за подписки и игры. "
-        f"Меняй на {pe('gift')} NFT-подарки и TG Premium.</blockquote>"
+        f"<blockquote>Зарабатывай <b>Голду</b> {pe('coin')} на заданиях, бонусах и играх — "
+        f"и меняй её на {pe('gift')} NFT-подарки или TG Premium.</blockquote>"
     )
 
 
@@ -301,8 +301,8 @@ async def cmd_start(m: Message, command: CommandStart):
                 try:
                     await BOT.send_message(
                         ref,
-                        f"{pe('party')} По твоей ссылке присоединился друг "
-                        f"— <b>+{REF_BONUS} {pe('coin')}</b>!",
+                        f"{pe('party')} По твоей ссылке зашёл друг — "
+                        f"<b>+{REF_BONUS} {pe('coin')}</b> твои!",
                         parse_mode="HTML",
                     )
                 except TelegramAPIError:
@@ -353,7 +353,7 @@ def tasks_view(uid):
     rows = []
     lines = [
         f"{pe('tasks')} <b>Задания</b>", "",
-        "<blockquote>Подпишись на канал и нажми «Проверить».</blockquote>", "",
+        "<blockquote>Подпишись на канал и нажми «Проверить» — Голда придёт сразу.</blockquote>", "",
     ]
     ts = db.tasks()
     if not ts:
@@ -425,8 +425,8 @@ async def cb_games(c: CallbackQuery):
     u = db.get_user(c.from_user.id)
     text = (
         f"{pe('games')} <b>Игры</b> · баланс <b>{fg(u['gold'])} {pe('coin')}</b>\n\n"
-        "Выбери игру: откроется описание и ставки.\n"
-        "В группах играй текстом, например <b>Футбол 100</b>."
+        "Выбери игру — покажу правила и ставки.\n"
+        "В группах проще текстом, например <b>Футбол 100</b>."
     )
     markup = kb(
         [btn("Футбол", "g:football", icon="ball"), btn("Баскетбол", "g:basketball")],
@@ -456,27 +456,27 @@ def stakes_kb(game):
 # (иконка, название, описание, пример-команда, множители-строка для цитаты)
 GAME_CARDS = {
     "football": ("ball", "Футбол",
-        "Удар по воротам: мяч в сетке, в углу или «девятка» — это победа.",
+        "Один удар по воротам. Мяч в сетке — ставка возвращается, в угол и «девятка» — победа.",
         "Футбол 100",
         "мяч в сетке — x1.0 (возврат)\nв угол — x1.2\nдевятка — x1.8"),
     "basketball": ("games", "Баскетбол",
-        "Бросок в кольцо: чистое попадание и попадание с щитком приносят выигрыш.",
+        "Один бросок в кольцо. Попадание с щитком и чистое попадание приносят выигрыш.",
         "Баскетбол 100",
         "с щитком — x1.7\nчисто в кольцо — x2.3"),
     "bowling": ("games", "Боулинг",
-        "Нужен только страйк: все кегли с одного шара.",
+        "Один шар. Нужен страйк — все кегли разом.",
         "Боулинг 100",
         "страйк — x4.8"),
     "cubes": ("cube", "Кубы",
-        "Угадай сторону: малые (1-3) или большие (4-6).",
+        "Угадай сторону: малые (1–3) или большие (4–6).",
         "Кубы 100 малые · Кубы 100 большие",
         "угадал сторону — x1.64"),
     "dart": ("target", "Дартс",
-        "Бросок в мишень: попади в «яблочко» и забирай крупный приз.",
+        "Один бросок в мишень. Попади в «яблочко» — и забери главный приз.",
         "Дартс 100",
         "яблочко — x5.0"),
     "slots": ("spin", "Слоты",
-        "Крути барабаны: тройные комбинации дают призы, три семёрки — главный.",
+        "Один спин. Комбинации в ряд приносят призы, три бара — джекпот.",
         "Слоты 500",
         "бары в ряд (джекпот) — x15\nтри в ряд — x7.5\nпара — x4.5"),
 }
@@ -562,9 +562,9 @@ def charge_uid(uid, amt):
     if amt != 0 and stake <= 0:
         return None, "Ставка должна быть больше нуля"
     if stake <= 0:
-        return None, "Недостаточно голды. Выполни задания в личке бота!"
+        return None, "Не хватает Голды — заработай её на заданиях в личке бота"
     if not db.charge_gold(uid, stake):     # атомарный UPDATE ... WHERE gold >= ?
-        return None, "Недостаточно голды! Пополни баланс в личке бота."
+        return None, "Не хватает Голды — пополни баланс в личке бота"
     return stake, None
 
 
@@ -588,20 +588,20 @@ async def play_dice_game(uid, game, stake, msg, back=True, group_id=None):
         if pay >= 1:
             if won == stake:               # гол минимальной силы: ставка возвращается
                 await msg.answer(
-                    f"<b>{win_word}</b>\n"
-                    f"{pe('coin')} Ничья — ставка {fg(stake)} {pe('coin')} возвращается.",
+                    f"{pe('check')} <b>{win_word}</b>\n"
+                    f"Ничья — ставка {fg(stake)} {pe('coin')} возвращается.",
                     reply_markup=rm,
                 )
             else:
                 await msg.answer(
-                    f"<b>{win_word}</b>\n"
-                    f"{pe('party')} Победа! +{fg(won - stake)} {pe('coin')} (множитель x{pay})",
+                    f"{pe('party')} <b>{win_word}</b>\n"
+                    f"Победа! +{fg(won - stake)} {pe('coin')} (множитель x{pay})",
                     reply_markup=rm,
                 )
         else:
             await msg.answer(
                 f"{head} {win_word}\n"
-                f"{pe('coin')} Почти! Вернул {fg(won)} {pe('coin')} — половину ставки.",
+                f"{pe('coin')} Почти получилось — возвращаю половину ставки: {fg(won)} {pe('coin')}.",
                 reply_markup=rm,
             )
     else:
@@ -610,7 +610,7 @@ async def play_dice_game(uid, game, stake, msg, back=True, group_id=None):
             db.track_group_game(group_id, uid, False, 0)
         await msg.answer(
             f"{head} {fail_word}\n"
-            f"{pe('sad')} Ставка {fg(stake)} {pe('coin')} сгорела.",
+            f"{pe('sad')} Ставка {fg(stake)} {pe('coin')} не сыграла. Повезёт в следующий раз!",
             reply_markup=rm,
         )
 
@@ -619,9 +619,9 @@ def cube_outcome(side, val):
     """Исход кубов без числа: только сторона и результат."""
     win = (val <= 3) if side == "lo" else (val >= 4)
     if win:
-        word = f"{pe('cube')} МАЛЫЕ! Точно!" if side == "lo" else f"{pe('cube')} БОЛЬШИЕ! Точно!"
+        word = f"{pe('cube')} Малые! В точку!" if side == "lo" else f"{pe('cube')} Большие! В точку!"
     else:
-        word = f"{pe('cube')} Выпали большие..." if side == "lo" else f"{pe('cube')} Выпали малые..."
+        word = f"{pe('cube')} Выпали большие — не эта сторона" if side == "lo" else f"{pe('cube')} Выпали малые — не эта сторона"
     return win, word
 
 
@@ -639,7 +639,7 @@ async def roll_cube(uid, stake, side, msg, back=True, group_id=None):
         if group_id:
             db.track_group_game(group_id, uid, True, won - stake)
         await msg.answer(
-            f"{word}\n{pe('party')} Победа! +{fg(won - stake)} {pe('coin')} (x{CUBE_X})",
+            f"{word}\n{pe('party')} Победа! +{fg(won - stake)} {pe('coin')} (множитель x{CUBE_X})",
             reply_markup=rm,
         )
     else:
@@ -647,7 +647,7 @@ async def roll_cube(uid, stake, side, msg, back=True, group_id=None):
         if group_id:
             db.track_group_game(group_id, uid, False, 0)
         await msg.answer(
-            f"{word}\n{pe('sad')} Ставка {fg(stake)} {pe('coin')} сгорела.",
+            f"{word}\n{pe('sad')} Ставка {fg(stake)} {pe('coin')} не сыграла. Ещё бросок?",
             reply_markup=rm,
         )
 
@@ -661,7 +661,7 @@ async def cb_stake(c: CallbackQuery):
         return
     left = cd_check(f"u{c.from_user.id}")
     if left:
-        await c.answer(f"Секунду! Подожди {max(1, math.ceil(left))} сек", show_alert=True)
+        await c.answer(f"Секунду! Подожди {max(1, math.ceil(left))} с", show_alert=True)
         return
     stake = await charge(c, amt)
     if stake is None:
@@ -693,7 +693,7 @@ async def cb_cube(c: CallbackQuery):
     side = c.data.split(":")[1]
     g = GAMES.pop(uid, None)
     if not g or "stake" not in g:
-        await c.answer("Игра устарела, начни заново", show_alert=True)
+        await c.answer("Игра уже закрыта — начни заново", show_alert=True)
         return
     stake = g["stake"]
     await roll_cube(uid, stake, side, c.message)
@@ -710,7 +710,7 @@ def shop_view(uid):
     ]
     its = db.items()
     if not its:
-        lines.append("Скоро пополнится.")
+        lines.append("Товары скоро появятся — загляни позже.")
     for it in its:
         lines.append(f"{pe('tags')} {it['title']} — {fg(it['cost'])} {pe('coin')}")
         rows.append([btn(f"Купить: {it['title']}", f"buy:{it['id']}", icon="present")])
@@ -734,7 +734,7 @@ async def cb_buy(c: CallbackQuery):
         await c.answer("Товар недоступен", show_alert=True)
         return
     if not db.charge_gold(uid, it["cost"]):   # атомарное списание: минус невозможен
-        await c.answer("Не хватает голды", show_alert=True)
+        await c.answer("Не хватает Голды на балансе", show_alert=True)
         return
     rid = db.add_request(uid, iid)
     username = "@" + u["username"] if u["username"] else str(uid)
@@ -744,7 +744,7 @@ async def cb_buy(c: CallbackQuery):
     )
     text, markup = shop_view(uid)
     await show(c, text, reply_markup=markup)
-    await c.answer(f"Заявка #{rid} принята! Админ выдаст приз.", show_alert=True)
+    await c.answer(f"Заявка #{rid} принята — админ выдаст приз", show_alert=True)
 
 
 # ---------- остальное меню ----------
@@ -754,7 +754,7 @@ async def cb_balance(c: CallbackQuery):
     u = db.get_user(c.from_user.id)
     await show(c, 
         f"{pe('wallet')} Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n\n"
-        "Выполняй задания, играй в игры и забирай бонус!",
+        "Зарабатывай Голду: задания, ежедневный бонус и игры.",
         reply_markup=kb(
             [btn("Пополнить", "topup", icon="stars"), btn("Меню", "menu", icon="home")]
         ),
@@ -770,10 +770,10 @@ async def cb_profile(c: CallbackQuery):
     await open_banner(c, PROFILE_BANNER_URL,
         f"{pe('wallet')} <b>Профиль</b>\n\n"
         f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>\n"
-        f"Приглашено друзей: {n}\n\n"
-        f"{pe('people')} Ссылка для друзей:\n"
+        f"Приглашено друзей: <b>{n}</b>\n\n"
+        f"{pe('people')} Твоя ссылка для друзей:\n"
         f"<code>https://t.me/{ME}?start=ref_{uid}</code>\n\n"
-        f"<blockquote>Друг по твоей ссылке — <b>+{REF_BONUS} {pe('coin')}</b> тебе.</blockquote>",
+        f"<blockquote>Друг зашёл по ней — тебе <b>+{REF_BONUS} {pe('coin')}</b> сразу.</blockquote>",
         reply_markup=kb(
             [btn("Пополнить", "topup", icon="stars"), btn("Задания", "tasks", icon="tasks")],
             [btn("Меню", "menu", icon="home")],
@@ -789,7 +789,7 @@ async def cb_refs(c: CallbackQuery):
     await show(c, 
         f"{pe('people')} <b>Друзья</b> · приглашено: <b>{n}</b>\n\n"
         f"<code>https://t.me/{ME}?start=ref_{uid}</code>\n"
-        f"<blockquote>Друг по ссылке — <b>+{REF_BONUS} {pe('coin')}</b> тебе, сразу.</blockquote>",
+        f"<blockquote>Друг зашёл по ссылке — тебе <b>+{REF_BONUS} {pe('coin')}</b> сразу после его запуска бота.</blockquote>",
         reply_markup=kb(
             [btn("Пригласить друга", None, icon="people", switch_inline="invite")],
             [btn("Копировать ссылку", "refcopy", icon="tags")],
@@ -804,8 +804,8 @@ async def on_inline(q: InlineQuery):
     """Карточка приглашения «via @бот»: фото + подпись + кнопка с ref-ID отправителя."""
     uid = q.from_user.id
     caption = (
-        f"{pe('games')} <b>Funs</b> — играй и зарабатывай Голду!\n"
-        f"Меняй её на NFT-подарки и TG Premium.\n"
+        f"{pe('games')} <b>Funapp</b> — играй и зарабатывай Голду!\n"
+        f"Обмен на NFT-подарки и TG Premium.\n"
         f"Заходи по моей ссылке и забирай бонус {pe('gift')}"
     )
     card = InlineQueryResultPhoto(
@@ -840,7 +840,7 @@ async def cb_refguide(c: CallbackQuery):
 @DP.callback_query(F.data == "top")
 async def cb_top(c: CallbackQuery):
     top = db.top_users(10)
-    medals = ["🥇", "🥈", "🥉"]
+    medals = [pe('trophy'), " 2.", " 3."]
     lines = []
     for i, u in enumerate(top):
         name = f"@{u['username']}" if u["username"] else f"ID {u['id']}"
@@ -848,9 +848,9 @@ async def cb_top(c: CallbackQuery):
         lines.append(f"{mark} {name} · {fg(u['gold'])} {pe('coin')}")
     body = "\n".join(lines) or "Пока никого."
     text = (
-        f"{pe('trophy')} <b>Топ по голде</b>\n\n{body}\n\n"
-        "<blockquote expandable>Админ иногда разыгрывает банк по этому топу: "
-        "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие.</blockquote>"
+        f"{pe('trophy')} <b>Топ по Голде</b>\n\n{body}\n\n"
+        "<blockquote expandable>Иногда админ разыгрывает Банк по этому топу: "
+        "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. Круглосуточная игра повышает шансы.</blockquote>"
     )
     await show(c, text, reply_markup=back_kb())
     await c.answer()
@@ -880,9 +880,9 @@ async def cb_bonus(c: CallbackQuery):
 async def cb_topup(c: CallbackQuery):
     lines = [
         f"{pe('stars')} <b>Пополнение в Stars</b>", "",
-        f"<blockquote>Курс: <b>1 {pe('stars')} = 10 G</b>. Пачка покрупнее — бонус сверху.</blockquote>", "",
+        f"<blockquote>Курс: <b>1 {pe('stars')} = 10 G</b>. Чем больше пачка — тем щедрее бонус.</blockquote>", "",
     ]
-    lines += [f"{pe('party')} Голда прилетает сразу после оплаты."]
+    lines += [f"{pe('party')} Голда приходит сразу после оплаты."]
     rows = []
     for stars, g in TOPUP.items():
         pct = topup_bonus_pct(stars)
@@ -907,8 +907,8 @@ async def cb_pay(c: CallbackQuery):
         return
     db.upsert_user(uid, c.from_user.username)
     await c.message.answer_invoice(
-        title=f"{fg(gold_amt)} голды",
-        description=f"Пополнение баланса Gold Bot на {fg(gold_amt)} G",
+        title=f"{fg(gold_amt)} Голды",
+        description=f"Пополнение Funapp на {fg(gold_amt)} G",
         payload=f"topup:{gold_amt}",
         provider_token="",
         currency="XTR",
@@ -922,7 +922,7 @@ async def cb_custom_topup(c: CallbackQuery):
     CUSTOM_TOPUP[c.from_user.id] = time.time()
     await show(c,
         f"{pe('present')} <b>Своя сумма</b>\n\n"
-        "Напиши, сколько звёзд купить — от <b>1</b> до <b>10 000</b>.\n"
+        "Напиши, сколько звёзд купить: от <b>1</b> до <b>10 000</b>.\n"
         f"Курс: <b>1 {pe('stars')} = 10 G</b>. Бонусы те же: "
         "10+ {p} → +10%, 25+ → +20%, 50+ → +30%".replace("{p}", pe('stars')),
         reply_markup=kb([btn("Отмена", "topup", icon="back")]))
@@ -941,19 +941,19 @@ async def custom_topup_amount(m: Message):
         raise SkipHandler                # не наш контекст — пусть ответит основной парсер
     t = (m.text or "").strip().replace(" ", "")
     if not t.isdigit():
-        await m.answer(f"{pe('sad')} Числом, от 1 до 10 000 {pe('stars')}")
+        await m.answer(f"{pe('sad')} Напиши числом от 1 до 10 000 {pe('stars')}")
         return
     stars = int(t)
     if not (1 <= stars <= 10000):
-        await m.answer(f"{pe('sad')} От 1 до 10 000 {pe('stars')}")
+        await m.answer(f"{pe('sad')} Нужно от 1 до 10 000 {pe('stars')}")
         return
     CUSTOM_TOPUP.pop(m.from_user.id, None)
     gold_amt = topup_gold(stars)
     db.upsert_user(m.from_user.id, m.from_user.username)
     pct = topup_bonus_pct(stars)
     await m.answer_invoice(
-        title=f"{fg(gold_amt)} голды",
-        description=f"Пополнение баланса Gold Bot на {fg(gold_amt)} G"
+        title=f"{fg(gold_amt)} Голды",
+        description=f"Пополнение Funapp на {fg(gold_amt)} G"
                     + (f" (бонус +{pct}%)" if pct else ""),
         payload=f"topup:{gold_amt}",
         provider_token="",
@@ -984,9 +984,9 @@ async def on_paid(m: Message):
         return
     u = db.get_user(uid)
     await m.answer(
-        f"{pe('stars')} Оплата прошла!\n"
-        f"+{fg(gold_amt)} {pe('coin')} зачислено.\n"
-        f"Баланс: <b>{fg(u['gold'])} {pe('coin')}</b>",
+        f"{pe('check')} Оплата прошла!\n"
+        f"+{fg(gold_amt)} {pe('coin')} уже на балансе.\n"
+        f"Приятной игры!",
         reply_markup=menu_kb(u["gold"]),
     )
     await notify_admins(
@@ -1275,17 +1275,18 @@ def reference_pack():
     Используется в /help и вторым сообщением в /start."""
     bq = lambda t, h: f"<blockquote expandable><b>{h}</b>\n{t}</blockquote>"
     return (
-        f"{pe('info')} <b>Funs · Справочник всех функций</b>\n\n"
-        + bq("Валюта бота — Голда. Баланс и профиль: /balance · кнопки меню — под каждым сообщением. "
-           "Профиль показывает баланс, игры, выигрыши и рефералов.",
+        f"{pe('info')} <b>Funapp · Справочник</b>\n\n"
+        + bq("Валюта Funapp — Голда. Баланс: /balance · кнопки меню — под каждым сообщением. "
+           "В профиле — баланс, друзья и личная ссылка.",
            f"{pe('wallet')} Баланс и профиль")
         + "\n" + bq("Футбол · Баскетбол · Боулинг · Кубы · Дартс · Слоты.\n"
            "В группах — текстом: «Футбол 100», «Слоты 500», «Кубы 100 малые». "
            "Ставки: 10 · 50 · 100 · 500 · 1000 · 5000 · «все». "
-           "Точные множители — в карточке каждой игры (/plays → игра).",
+           "Множители — в карточке каждой игры (/plays → игра).",
            f"{pe('games')} Игры")
         + "\n" + bq(f"Раз в {BONUS_HOURS} часа — бесплатная Голда: /bonus или кнопка меню.\n"
-           "Промокоды: напиши код (или «промокод КОД») — в личке или в любой группе.",
+           "Промокоды: напиши код (или «промокод КОД») — в личке или в любой группе. "
+           "Один код — одно активирование на человека.",
            f"{pe('gift')} Бонус и промокоды")
         + "\n" + bq("Оплата Telegram Stars, Голда приходит сразу.\n"
            "10 Stars → 110 G (+10%) · 25 Stars → 300 G (+20%) · 50 Stars → 650 G (+30%). "
@@ -1295,21 +1296,21 @@ def reference_pack():
            "«держи 5000», «тебе 1 500 000», «5к», «2кк», «+250000». "
            "Получателю — уведомление в личку.",
            f"{pe('right')} Переводы друзьям")
-        + "\n" + bq("Твоя ссылка: /referrals. Друг запустил бота и выполнил первое задание — "
-           "тебе +25 Голды за каждого.",
+        + "\n" + bq("Твоя ссылка: /referrals. Друг запустил бота по ней — "
+           "тебе сразу +25 Голды за каждого.",
            f"{pe('people')} Рефералы")
-        + "\n" + bq("Подписка на каналы = Голда. Раздел «Задания» в меню — подписался, "
-           "нажал «Проверить» — получил награду.",
+        + "\n" + bq("Подпишись на канал — получишь Голду. Раздел «Задания» в меню: "
+           "подписался, нажал «Проверить» — награда твоя.",
            f"{pe('tasks')} Задания")
         + "\n" + bq("Обмен Голды на товары и подарки: раздел «Магазин». "
-           "Заявку видит админ — доставка после подтверждения.",
+           "Админ получит заявку и выдаст приз.",
            f"{pe('tags')} Магазин")
-        + "\n" + bq("Топ игроков: /balance → «Топ». Админ иногда разыгрывает Банк "
-           "по топ-20: топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. "
-           "Всем приходят уведомления.",
+        + "\n" + bq("Топ игроков: /balance → «Топ». По нему иногда разыгрывается Банк: "
+           "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. "
+           "Всем игрокам приходят уведомления.",
            f"{pe('crown')} Топ и Банк")
-        + "\n" + bq("В любом чате набери @funapp_game — всплывёт карточка "
-           "с твоей реферальной ссылкой для приглашения.",
+        + "\n" + bq("В любом чате набери @funapp_game — всплывёт красивая карточка "
+           "с твоей ссылкой для приглашения друзей.",
            f"{pe('app')} Инлайн-приглашение")
     )
 
@@ -1675,23 +1676,23 @@ async def group_info(m: Message, uid, kind):
     elif kind == "топ":
         if m.chat.type in ("group", "supergroup"):
             rows = db.group_top(m.chat.id, 10)
-            medals = ["🥇", "🥈", "🥉"]
+            medals = [pe('trophy'), " 2.", " 3."]
             lines = []
             for i, t in enumerate(rows):
                 tname = f"@{t['username']}" if t["username"] else f"ID {t['user_id']}"
                 mark = medals[i] if i < 3 else f" {i + 1}."
                 lines.append(f"{mark} {tname} · {fg(t['total_won'])} {pe('coin')}")
-            body = "\n".join(lines) or "Пока никто не играл в этой группе."
+            body = "\n".join(lines) or "В этой группе пока никто не играл — будь первым!"
             await safe_reply(m, f"{pe('trophy')} <b>Топ этой группы</b>\n\n{body}")
             return
         top = db.top_users(10)
-        medals = ["🥇", "🥈", "🥉"]
+        medals = [pe('trophy'), " 2.", " 3."]
         lines = []
         for i, t in enumerate(top):
             tname = f"@{t['username']}" if t["username"] else f"ID {t['id']}"
             mark = medals[i] if i < 3 else f" {i + 1}."
             lines.append(f"{mark} {tname} · {fg(t['gold'])} {pe('coin')}")
-        body = "\n".join(lines) or "Пока никого."
+        body = "\n".join(lines) or "Пока никого — стань первым!"
         await safe_reply(m, f"{pe('trophy')} <b>Топ по голде</b>\n\n{body}")
     elif kind == "бонус":
         now = int(time.time())
@@ -1769,7 +1770,7 @@ def group_settings_view(chat_id, g):
 @DP.message(Command("settings"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_group_settings(m: Message):
     if not await is_group_admin(m.from_user.id, m.chat.id):
-        await safe_reply(m, "Настройки — только для админов группы")
+        await safe_reply(m, "Настройки доступны только админам группы")
         return
     g = db.get_group(m.chat.id)
     text, markup = group_settings_view(m.chat.id, g)
@@ -1782,7 +1783,7 @@ async def cmd_games_on(m: Message):
         await safe_reply(m, "Только админ группы")
         return
     db.set_group(m.chat.id, games_on=1)
-    await safe_reply(m, f"{pe('party')} Игры в этой группе включены")
+    await safe_reply(m, f"{pe('party')} Игры в этой группе включены — за дело!")
 
 
 @DP.message(Command("games_off"), F.chat.type.in_({"group", "supergroup"}))
@@ -1869,7 +1870,7 @@ async def _tx_notify_in(to_id, amount, name_b):
     """Получателю в личку, если бот запускал и не блокировал."""
     try:
         await BOT.send_message(to_id,
-            f"{pe('coin')} <b>Вам пришло {fg(amount)} Голды</b> от {html.escape(name_b)}")
+            f"{pe('gift')} <b>Вам пришло {fg(amount)} Голды</b> от {html.escape(name_b)}")
     except TelegramAPIError:
         pass
 
@@ -1898,7 +1899,7 @@ async def reply_transfer(m: Message):
     if not db.get_user(src.id):
         msg = await m.reply(
             f"{pe('sad')} {html.escape(name_b)}, получатель ещё не запускал бота",
-            reply_markup=kb([btn("Открыть Funs", "tx:none", url=f"https://t.me/{ME}")]))
+            reply_markup=kb([btn("Открыть Funapp", "tx:none", url=f"https://t.me/{ME}")]))
         await _tx_auto_delete(msg)
         return
     db.upsert_user(uid, m.from_user.username)
