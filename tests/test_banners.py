@@ -66,6 +66,23 @@ def test_every_banner_constant_is_used():
     src = open(os.path.join(_dir, "..", "bot.py")).read()
     for const in ["BANNER_URL", "TASKS_BANNER_URL", "PROFILE_BANNER_URL",
                   "GAMES_BANNER_URL", "SHOP_BANNER_URL", "BONUS_BANNER_URL",
-                  "TOPUP_BANNER_URL", "REF_BANNER_URL"]:
+                  "TOPUP_BANNER_URL", "REF_BANNER_URL",
+                  "TOP_BANNER_URL", "CASE_BANNER_URL"]:
         uses = src.count(const)
         assert uses >= 2, f"{const} определён, но не используется ({uses})"
+
+
+def test_top_screen_uses_top_banner():
+    """v12.13: кнопка «Топ» открывает экран с баннером ТОП."""
+    c = FakeCb()
+    asyncio.run(b.cb_top(c))
+    assert c.message.sent[0][0] == "photo"
+    assert c.message.sent[0][1][0] == b.TOP_BANNER_URL
+    assert "Топ по Голде" in c.message.sent[0][1][1]
+
+def test_case_screen_uses_case_banner():
+    """v12.13: кнопка «Кейсы» открывает экран с баннером КЕЙСЫ."""
+    c = FakeCb()
+    asyncio.run(b.cb_case(c))
+    assert c.message.sent[0][0] == "photo"
+    assert c.message.sent[0][1][0] == b.CASE_BANNER_URL

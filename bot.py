@@ -58,6 +58,8 @@ TOPUP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/m
 SHOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/33e9be752_ccab4d553_IMG_20261023_153353_579.jpg"  # баннер «Магазин»
 REF_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/bd3bb2314_ref_banner.jpg"  # баннер «Справочник» (v12.10)
 BONUS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/e2ce684be_bonus_banner.jpg"  # баннер «Бонусы»
+TOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/5bb14910a_0fab3ce48_IMG_20261023_223806_078.jpg"  # баннер «Топ» (v12.13)
+CASE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/64136b7d6_f1ea39639_IMG_20261023_223738_753.jpg"  # баннер «Кейсы» (v12.13)
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -902,7 +904,7 @@ async def cb_top(c: CallbackQuery):
         "<blockquote expandable>Иногда админ разыгрывает Банк по этому топу: "
         "топ-3 — крупные доли, 4–10 — средние, 11–20 — меньшие. Круглосуточная игра повышает шансы.</blockquote>"
     )
-    await show(c, text, reply_markup=kb(
+    await open_banner(c, TOP_BANNER_URL, text, reply_markup=kb(
         [btn("Витрина богатства", "topspent", icon="crown")],
         [btn("Меню", "menu", icon="home")]))
     await c.answer()
@@ -1058,7 +1060,8 @@ def case_view(uid):
 
 @DP.callback_query(F.data == "case")
 async def cb_case(c: CallbackQuery):
-    await show(c, *case_view(c.from_user.id))
+    text, markup = case_view(c.from_user.id)
+    await open_banner(c, CASE_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
