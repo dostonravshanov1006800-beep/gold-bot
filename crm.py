@@ -321,11 +321,12 @@ def setup(ctx):
             "level": "Уровни (сожжено)", "shop": "Магазин (сожжено)",
             "clan": "Создание кланов (сожжено)", "clanfee": "Взносы в кланы",
             "exchange": "Обмен в Stars (сожжено)", "jackpot": "Джекпот-выплаты",
+            "takeall": "Изъятие у всех (админ)", "reset": "Полный сброс (админ)",
             "duel": "Ставки дуэлей", "duel_win": "Победы дуэлей",
             "stake": "Ставки игр", "gwin": "Выигрыши игр",
             "transfer_in": "Переводы (входящие)", "transfer_out": "Переводы (исходящие)",
         }
-        BURN = {"case", "level", "shop", "clan", "clanfee", "exchange"}
+        BURN = {"case", "level", "shop", "clan", "clanfee", "exchange", "takeall", "reset"}
         MINE = {"task", "bonus", "promo", "topup", "ref", "bank"}
 
         def render(kinds, title):

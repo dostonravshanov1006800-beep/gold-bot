@@ -302,6 +302,34 @@ def take_gold(uid, amount):
     return r["gold"] if r else None
 
 
+def take_all_gold(amount=None):
+    """v12.19: изъять amount G у каждого юзера (amount=None — всё).
+    Сгорание из оборота (анти-инфляция). Возвращает (юзеров, всего G).
+    spent/уровни НЕ растут — это изъятие, а не трата."""
+    rows = q("SELECT id, gold FROM users WHERE gold > 0")
+    tot, n = 0, 0
+    for r in rows:
+        take = r["gold"] if amount is None else min(r["gold"], amount)
+        ex("UPDATE users SET gold = gold - ? WHERE id=?", (take, r["id"]))
+        tot += take
+        n += 1
+    if tot:
+        log_econ(0, -tot, "takeall")
+    return n, tot
+
+def reset_all_gold():
+    """v12.19: полный сброс голды везде: балансы юзеров, клан-пул
+    войны недели, джекпот. Возвращает словарь с былыми суммами."""
+    ug = one("SELECT COALESCE(SUM(gold),0) AS s, COUNT(*) AS n FROM users WHERE gold > 0")
+    cp, jp = clan_pool(), jackpot_pool()
+    ex("UPDATE users SET gold = 0 WHERE gold > 0")
+    put_meta("clan_pool", "0")
+    put_meta("jackpot_pool", "0")
+    tot = ug["s"] + cp + jp
+    if tot:
+        log_econ(0, -tot, "reset")
+    return {"users": ug["n"], "gold": ug["s"], "clans": cp, "jackpot": jp}
+
 def zero_gold(uid):
     """Полное обнуление баланса юзера. Возвращает прежний баланс или None."""
     r = one("SELECT gold FROM users WHERE id=?", (uid,))

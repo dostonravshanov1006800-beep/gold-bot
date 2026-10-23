@@ -2149,6 +2149,89 @@ async def cmd_help(m: Message):
 
 # ---------- CRM-админка внутри бота ----------
 import crm
+# ---------- v12.19: масс-операции админа текстом (анти-инфляция) ----------
+ADMIN_TAKE_ALL_RE = re.compile(r"^отнять у всех (?:(\d{1,12})|вс[её])$", re.I)
+ADMIN_RESET_RE = re.compile(r"^сброс(?:ить)? вс[её]$", re.I)
+
+
+@DP.message(F.chat.type == "private", F.text)
+async def admin_mass_ops(m: Message):
+    """Текстовые команды админа в ЛС (v12.19):
+    «отнять у всех 5000» / «отнять у всех всё» — изъять голду у всех;
+    «сбросить всё» — обнулить балансы, клан-пул и джекпот.
+    Перед выполнением — подтверждение кнопкой (необратимо)."""
+    if not is_admin(m.from_user.id):
+        raise SkipHandler
+    t = (m.text or "").strip()
+    mt = ADMIN_TAKE_ALL_RE.match(t)
+    mr = ADMIN_RESET_RE.match(t)
+    if not (mt or mr):
+        raise SkipHandler
+    if mt:
+        amount = int(mt.group(1)) if mt.group(1) else None
+        rows = db.q("SELECT gold FROM users WHERE gold > 0")
+        tot = sum(min(r["gold"], amount) for r in rows) if amount else \
+            sum(r["gold"] for r in rows)
+        what = (f"{fg(amount)} {pe('coin')} у каждого" if amount
+                else f"{pe('bolt')} ВСЮ голду")
+        text = (f"{pe('warn')} <b>Изъятие голды у всех</b>\n\n"
+                f"Списать {what}?\n"
+                f"Юзеров с голдой: <b>{fg(len(rows))}</b> · "
+                f"суммарно изымется <b>{fg(tot)} {pe('coin')}</b>\n\n"
+                f"{pe('cross')} Голда сгорает из экономики. Операция необратима.")
+        markup = kb([btn("Подтверждаю изъятие", "adm:take:" + (str(amount) if amount else "all"), "check"),
+                     btn("Отмена", "adm:cancel", "back")])
+    else:
+        ug = db.one("SELECT COALESCE(SUM(gold),0) AS s, COUNT(*) AS n "
+                    "FROM users WHERE gold > 0")
+        cp, jp = db.clan_pool(), db.jackpot_pool()
+        text = (f"{pe('warn')} <b>Полный сброс голды</b>\n\n"
+                f"Обнулятся:\n"
+                f"· балансы <b>{fg(ug['n'])}</b> юзеров — <b>{fg(ug['s'])} {pe('coin')}</b>\n"
+                f"· пул войны кланов — <b>{fg(cp)} {pe('coin')}</b>\n"
+                f"· джекпот — <b>{fg(jp)} {pe('coin')}</b>\n\n"
+                f"{pe('cross')} Тотальное обнуление против инфляции. "
+                "Уровни и витрина трат не трогаются. Необратимо.")
+        markup = kb([btn("Сбросить всё", "adm:reset", "check"),
+                     btn("Отмена", "adm:cancel", "back")])
+    await m.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
+@DP.callback_query(F.data.startswith("adm:"))
+async def cb_adm_mass(c: CallbackQuery):
+    """Выполнение/отмена масс-операции (v12.19)."""
+    if not is_admin(c.from_user.id):
+        await c.answer("Только для админа", show_alert=True)
+        return
+    act = c.data.split(":")[1]
+    if act == "cancel":
+        await c.message.edit_text(f"{pe('cross')} Отменено.", parse_mode="HTML")
+        await c.answer("Отменено")
+        return
+    if act == "take":
+        arg = c.data.split(":")[2]
+        amount = None if arg == "all" else int(arg)
+        n, tot = db.take_all_gold(amount)
+        await c.message.edit_text(
+            f"{pe('check')} <b>Изъятие выполнено</b>\n\n"
+            f"Сожжено <b>{fg(tot)} {pe('coin')}</b> у <b>{fg(n)}</b> юзеров.",
+            parse_mode="HTML")
+        await c.answer("Голда изъята")
+        return
+    if act == "reset":
+        r = db.reset_all_gold()
+        await c.message.edit_text(
+            f"{pe('check')} <b>Сброс выполнен</b>\n\n"
+            f"Балансы: {fg(r['users'])} юзеров — {fg(r['gold'])} {pe('coin')}\n"
+            f"Клан-пул: {fg(r['clans'])} {pe('coin')}\n"
+            f"Джекпот: {fg(r['jackpot'])} {pe('coin')}\n"
+            f"Всего обнулено: <b>{fg(r['gold'] + r['clans'] + r['jackpot'])} {pe('coin')}</b>",
+            parse_mode="HTML")
+        await c.answer("Сброшено")
+        return
+    await c.answer()
+
+
 crm.setup({
     "bot": BOT, "dp": DP, "pe": pe, "btn": btn, "kb": kb, "fg": fg,
     "is_admin": is_admin, "broadcast_all": broadcast_all,
