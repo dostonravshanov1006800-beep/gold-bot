@@ -54,6 +54,8 @@ BANNER_URL = "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/1a
 TASKS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/210f7351e_tasks_banner.jpg"   # баннер «Задания»
 PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6613f01a8_profile_banner.png"  # баннер «Профиль»
 GAMES_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6fff4abbf_bdcd06513_IMG_20261023_132641_866.jpg"  # баннер «Игры»
+TOPUP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/10ba5c184_8d5d53a1c_IMG_20261023_153401_183.jpg"  # баннер «Пополнить»
+SHOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/33e9be752_ccab4d553_IMG_20261023_153353_579.jpg"  # баннер «Магазин»
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -722,7 +724,7 @@ def shop_view(uid):
 @DP.callback_query(F.data == "shop")
 async def cb_shop(c: CallbackQuery):
     text, markup = shop_view(c.from_user.id)
-    await show(c, text, reply_markup=markup)
+    await open_banner(c, SHOP_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
@@ -892,9 +894,7 @@ async def cb_topup(c: CallbackQuery):
                          icon="present" if pct else "stars")])
     rows.append([btn("Своя сумма", "ctop", icon="present")])
     rows.append([btn("Меню", "menu", icon="home")])
-    await show(c, 
-        "\n".join(lines), reply_markup=kb(*rows)
-    )
+    await open_banner(c, TOPUP_BANNER_URL, "\n".join(lines), reply_markup=kb(*rows))
     await c.answer()
 
 
