@@ -926,7 +926,23 @@ async def cb_bonus(c: CallbackQuery):
 # Экономика: всё, что здесь списывается, сгорает или перераспределяется.
 # Новая Голда не печатается (только task/bonus/promo/topup как раньше).
 
-CLAN_NAME_AWAIT = {}   # uid -> ts: ожидание имени клана (10 минут)
+CLAN_NAME_AWAIT = {}   # uid -> ts: ожидание ссылки группы при создании клана
+
+# v12.4: при создании клана принимается ТОЛЬКО ссылка на группу:
+# публичная t.me/имя (имя >= 5 символов) или приватная t.me/+код / joinchat/код
+GROUP_LINK_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?t\.me/(?:(\+[A-Za-z0-9_-]{10,64})"
+    r"|(joinchat/[A-Za-z0-9_-]{5,64})|([A-Za-z0-9_]{5,64}))$")
+
+
+def parse_group_link(text):
+    """Возвращает (link, name) или (None, None). name — имя публичной
+    группы (для приватных +код — None, имя сгенерирует db)."""
+    m = GROUP_LINK_RE.match((text or "").strip())
+    if not m:
+        return None, None
+    rest = (m.group(1) or m.group(2) or m.group(3))
+    return f"https://t.me/{rest}", (m.group(3) if m.group(3) else None)
 
 RARITY_RU = {"common": "общая", "rare": "редкая", "epic": "эпическая",
              "legend": "легендарная"}
@@ -1028,15 +1044,19 @@ def clan_view(uid):
     top = db.clans_top(5, week0)
     pool = db.clan_pool()
     if mc:
+        link_line = (f"Группа клана: {mc['link']}\n" if mc["link"] else "")
         text = (
             f"{pe('people')} <b>Клан «{mc['name']}»</b>\n\n"
             f"Участников: <b>{mc['members']}</b>\n"
+            f"{link_line}"
             f"Банк войны недели: <b>{fg(pool)} {pe('coin')}</b>\n\n"
             "<blockquote>Недельный счёт клана — сумма выигрышей его игроков. "
             "Победивший клан в понедельник делит банк войны поровну.</blockquote>"
         )
-        rows = [[btn("Покинуть клан", "clan:leave", icon="cross")],
-                [btn("Меню", "menu", icon="home")]]
+        rows = [[btn("Покинуть клан", "clan:leave", icon="cross")]]
+        if mc["owner"] == uid:
+            rows.append([btn("Удалить клан", "clan:del", icon="trash")])
+        rows.append([btn("Меню", "menu", icon="home")])
         return text, kb(*rows)
     top_lines = ("\n".join(
         f"{i + 1}. {t['name']} — {fg(t['score'] or 0)} {pe('coin')} ({t['members']} чел.)"
@@ -1045,7 +1065,8 @@ def clan_view(uid):
         f"{pe('people')} <b>Кланы</b>\n\n"
         f"{pe('crown')} <b>Топ недели</b>\n{top_lines}\n\n"
         f"{pe('coin')} Создание клана — <b>{fg(db.CLAN_CREATE_COST)} G</b> (сгорает), "
-        f"вход — <b>{fg(db.CLAN_JOIN_COST)} G</b> (идёт в банк войны недели)."
+        f"с 10-го уровня и только по <b>ссылке на группу</b>.\n"
+        f"Вход — <b>{fg(db.CLAN_JOIN_COST)} G</b> (идёт в банк войны недели)."
     )
     rows = [[btn("Создать клан", "clan:new", icon="plus")]]
     for t in top:
@@ -1062,30 +1083,57 @@ async def cb_clan(c: CallbackQuery):
 
 @DP.callback_query(F.data == "clan:new")
 async def cb_clan_new(c: CallbackQuery):
-    CLAN_NAME_AWAIT[c.from_user.id] = time.time()
+    uid = c.from_user.id
+    u = db.get_user(uid)
+    lv = (u["level"] or 0) if u else 0
+    if lv < 10:                     # v12.4: создание клана — с 10-го уровня
+        await show(c,
+            f"{pe('crown')} <b>Создание клана — с 10-го уровня</b>\n\n"
+            f"Твой уровень: <b>{lv}</b>. Апгрейд — Профиль → Уровень: "
+            "каждая ступень сжигает Голду и остаётся навсегда. "
+            "10-й уровень открывает создание клана.",
+            reply_markup=kb([btn("К уровням", "profile", icon="up")],
+                            [btn("Клан", "clan", icon="people")]))
+        await c.answer()
+        return
+    CLAN_NAME_AWAIT[uid] = time.time()
     await show(c,
-        f"{pe('edit')} <b>Имя клана</b>\n\n"
-        f"Пришли название — от 3 до 24 символов. "
-        f"Списание <b>{fg(db.CLAN_CREATE_COST)} {pe('coin')}</b> произойдёт после имени.",
+        f"{pe('edit')} <b>Ссылка на группу клана</b>\n\n"
+        "Пришли ссылку на группу твоего клана: <b>t.me/имя_группы</b> "
+        "или <b>t.me/+код</b>.\n"
+        f"Списание <b>{fg(db.CLAN_CREATE_COST)} {pe('coin')}</b> произойдёт "
+        "после проверки ссылки.",
         reply_markup=kb([btn("Отмена", "clan", icon="back")]))
     await c.answer()
 
 
 @DP.message(F.chat.type == "private", F.text)
 async def clan_name_input(m: Message):
-    """Ввод имени клана: активен только в контексте «Создать клан» (10 мин).
-    Вне контекста — SkipHandler, чтобы работал основной парсер."""
+    """Ввод ссылки группы при создании клана (v12.4): принимается ТОЛЬКО
+    ссылка t.me/... Любой другой текст (команды, слова) отклоняется.
+    Вне контекста — SkipHandler."""
     ts = CLAN_NAME_AWAIT.get(m.from_user.id)
     if not ts or time.time() - ts > 600:
         raise SkipHandler
+    link, name = parse_group_link(m.text)
+    if not link:
+        CLAN_NAME_AWAIT[m.from_user.id] = time.time()   # можно прислать ещё раз
+        await m.answer(
+            f"{pe('warn')} Это не ссылка на группу.\n"
+            "Пример: <b>t.me/имя_группы</b> или <b>t.me/+код</b> — пришли ещё раз.",
+            parse_mode="HTML")
+        return
     CLAN_NAME_AWAIT.pop(m.from_user.id, None)
     db.upsert_user(m.from_user.id, m.from_user.username)
-    err = db.clan_create(m.from_user.id, m.text.strip())
+    if not name:                       # приватная ссылка +код — автоимя
+        name = f"Клан {db.next_clan_no()}"
+    err = db.clan_create(m.from_user.id, name, link)
     if err:
-        await m.answer(f"{pe('warn')} {err}")
+        await m.answer(f"{pe('warn')} {err}", parse_mode="HTML")
         return
     text, markup = clan_view(m.from_user.id)
-    await m.answer(f"{pe('party')} Клан создан!\n\n{text}", reply_markup=markup)
+    await m.answer(f"{pe('party')} Клан «{name}» создан!\n\n{text}",
+                   reply_markup=markup, parse_mode="HTML")
 
 
 @DP.callback_query(F.data.startswith("clan:join:"))
@@ -1102,6 +1150,32 @@ async def cb_clan_join(c: CallbackQuery):
 async def cb_clan_leave(c: CallbackQuery):
     db.clan_leave(c.from_user.id)
     await c.answer("Ты вышел из клана")
+    await show(c, *clan_view(c.from_user.id))
+
+
+@DP.callback_query(F.data == "clan:del")
+async def cb_clan_del(c: CallbackQuery):
+    """v12.4: удаление клана — подтверждение перед действием."""
+    mc = db.my_clan(c.from_user.id)
+    if not mc or mc["owner"] != c.from_user.id:
+        await c.answer("Удалить клан может только владелец", show_alert=True)
+        return
+    await show(c,
+        f"{pe('warn')} <b>Удалить клан «{mc['name']}»?</b>\n\n"
+        "Участники выйдут, недельный счёт сгорит. "
+        f"{fg(db.CLAN_CREATE_COST)} G за создание не возвращаются.",
+        reply_markup=kb([btn("Удалить навсегда", "clan:del:yes", icon="trash")],
+                        [btn("Отмена", "clan", icon="back")]))
+    await c.answer()
+
+
+@DP.callback_query(F.data == "clan:del:yes")
+async def cb_clan_del_yes(c: CallbackQuery):
+    err = db.clan_delete(c.from_user.id)
+    if err:
+        await c.answer(err, show_alert=True)
+        return
+    await c.answer("Клан удалён")
     await show(c, *clan_view(c.from_user.id))
 
 
@@ -1772,12 +1846,16 @@ def reference_pack():
            f"{pe('bolt')} Дуэли")
         + "\n" + bq("Меню → <b>Кейс</b>: за 500 Голды — рамки для топа, цвета "
            "имени и легендарный титул. Дубликат возвращает 100 G.\n"
-           "Профиль → <b>Уровень</b>: пороги 100 → 500 → 2 000 → 10 000 → 50 000 G. "
-           "Голда сгорает, уровень остаётся навсегда — это твой престиж.",
+           "Профиль → <b>Уровень</b>: 10 ступеней — 100 → 500 → 2 000 → 10 000 → "
+           "50 000 → 150к → 400к → 1М → 2,5М → 6М G. "
+           "Голда сгорает, уровень остаётся навсегда — 10-й открывает клан.",
            f"{pe('present')} Кейсы и уровни")
-        + "\n" + bq("Меню → <b>Клан</b>: создать за 1000 G или вступить за 100 G "
-           "(взнос идёт в банк недели). Счёт клана — сумма выигрышей его игроков "
-           "за неделю. Понедельник 00:00 — топ-клан делит банк поровну.",
+        + "\n" + bq("Меню → <b>Клан</b>: создать за 1000 G — с 10-го уровня, "
+           "принимается только ссылка на группу клана (t.me/...); "
+           "вступить — за 100 G (взнос идёт в банк недели).\n"
+           "Счёт клана — сумма выигрышей его игроков за неделю. "
+           "Понедельник 00:00 — топ-клан делит банк поровну.\n"
+           "Владелец может удалить клан — создание не возвращается.",
            f"{pe('people')} Кланы и война недели")
         + "\n" + bq("1% каждой ставки и 5% банков дуэлей копятся в общем банке. "
            "Каждый день в 21:00 банк целиком уходит одному случайному игроку, "

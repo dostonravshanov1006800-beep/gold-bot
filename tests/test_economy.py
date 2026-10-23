@@ -127,13 +127,18 @@ def test_jackpot_pool_and_active_players(fresh_db):
 
 # ---------- кланы ----------
 
+def lvl10(fresh_db, uid):
+    fresh_db.ex("UPDATE users SET level=10 WHERE id=?", (uid,))
+
+
 def test_clans_create_join_war(fresh_db):
     a, b, c = mkuser(fresh_db, 1, gold=5000), mkuser(fresh_db, 2, gold=5000), mkuser(fresh_db, 3, gold=5000)
-    err = fresh_db.clan_create(a, "Легенды")
+    lvl10(fresh_db, a)
+    err = fresh_db.clan_create(a, "Легенды", "https://t.me/legends")
     assert err is None
     assert fresh_db.get_user(a)["gold"] == 5000 - fresh_db.CLAN_CREATE_COST
-    assert fresh_db.clan_create(a, "Второй")              # уже в клане
-    assert "выйди" in fresh_db.clan_create(a, "Второй").lower() or "клане" in fresh_db.clan_create(a, "Второй").lower()
+    err = fresh_db.clan_create(a, "Второй", "t.me/second")   # уже в клане
+    assert "выйди" in (err or "").lower() or "клане" in (err or "").lower()
 
     assert fresh_db.clan_join(b, 999)                    # нет такого клана
     assert fresh_db.clan_join(b, fresh_db.my_clan(a)["id"]) is None
@@ -165,8 +170,9 @@ def test_clans_create_join_war(fresh_db):
 
 def test_clan_name_conflict_refunds(fresh_db):
     a, b = mkuser(fresh_db, 1, gold=5000), mkuser(fresh_db, 2, gold=5000)
-    assert fresh_db.clan_create(a, "Алмазы") is None
-    assert "уже есть" in fresh_db.clan_create(b, "Алмазы")
+    lvl10(fresh_db, a); lvl10(fresh_db, b)
+    assert fresh_db.clan_create(a, "Алмазы", "t.me/diamonds") is None
+    assert "уже есть" in fresh_db.clan_create(b, "Алмазы", "t.me/diamonds2")
     assert fresh_db.get_user(b)["gold"] == 5000          # голда вернулась
     assert fresh_db.get_user(b)["spent"] == 0
 
@@ -245,3 +251,55 @@ def test_duel_regex_parses_forms():
     assert m and m.group(1).lower() == "дартс"
     assert bot.DUEL_RE.match("футбол 100") is None          # обычная игра — не дуэль
     assert bot.DUEL_RE.match("дуэль") is None                # без параметров — мимо
+
+
+# ---------- v12.4: кланы — уровень 10, ссылка группы, удаление ----------
+
+def test_clan_requires_level10(fresh_db):
+    a = mkuser(fresh_db, 9, gold=5000)
+    err = fresh_db.clan_create(a, "Рано", "t.me/early")
+    assert err and "10-го уровня" in err
+    assert fresh_db.get_user(a)["gold"] == 5000      # ничего не списано
+    fresh_db.ex("UPDATE users SET level=10 WHERE id=?", (a,))
+    assert fresh_db.clan_create(a, "Рано", "t.me/early") is None
+
+
+def test_clan_level10_of_ladder(fresh_db):
+    """Лестница уровней — 10 ступеней, 10-й достижим и открывает клан."""
+    assert len(fresh_db.LEVEL_COSTS) == 10
+    a = mkuser(fresh_db, 11, gold=sum(fresh_db.LEVEL_COSTS) + 1000)
+    for _ in range(10):
+        ok, lv, _ = fresh_db.upgrade_level(a)
+        assert ok
+    assert fresh_db.get_user(a)["level"] == 10
+    ok, lv, cost = fresh_db.upgrade_level(a)           # выше нет
+    assert not ok and lv == 10 and cost == 0
+    assert fresh_db.clan_create(a, "Вершина", "t.me/topclan") is None
+
+
+def test_group_link_validation():
+    """parse_group_link: только t.me-ссылки групп, всё прочее отклоняется."""
+    assert bot.parse_group_link("t.me/funapp_clan") == \
+        ("https://t.me/funapp_clan", "funapp_clan")
+    assert bot.parse_group_link("https://t.me/my_clan_2026") == \
+        ("https://t.me/my_clan_2026", "my_clan_2026")
+    assert bot.parse_group_link("https://t.me/+AbCdEf123456") == \
+        ("https://t.me/+AbCdEf123456", None)
+    assert bot.parse_group_link("t.me/joinchat/xyz12") == \
+        ("https://t.me/joinchat/xyz12", None)
+    for bad in ["/admin", "admin", "https://vk.com/group", "t.me/ab",
+                "t.me/+short", "hello world", "t.me/", ""]:
+        assert bot.parse_group_link(bad)[0] is None, bad
+
+
+def test_clan_delete_by_owner_only(fresh_db):
+    a, b = mkuser(fresh_db, 21, gold=5000), mkuser(fresh_db, 22, gold=5000)
+    lvl10(fresh_db, a)
+    assert fresh_db.clan_create(a, "Смертные", "t.me/mortal") is None
+    cid = fresh_db.my_clan(a)["id"]
+    assert fresh_db.clan_join(b, cid) is None
+    assert "владелец" in fresh_db.clan_delete(b)      # не владелец
+    assert fresh_db.clan_delete(a) is None           # владелец
+    assert fresh_db.my_clan(a) is None and fresh_db.my_clan(b) is None
+    assert fresh_db.one("SELECT 1 FROM clans WHERE id=?", (cid,)) is None
+    assert fresh_db.get_user(a)["gold"] == 5000 - 1000   # 1000 G не вернулись

@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS clans(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     owner INTEGER,
+    link TEXT,
     created INTEGER
 );
 CREATE TABLE IF NOT EXISTS clan_members(
@@ -198,6 +199,10 @@ def init():
             _conn.execute(f"ALTER TABLE users ADD COLUMN {col} {dflt}")
         except sqlite3.OperationalError:
             pass
+    try:                                   # миграция кланов (v12.4: ссылка группы)
+        _conn.execute("ALTER TABLE clans ADD COLUMN link TEXT")
+    except sqlite3.OperationalError:
+        pass
     for col, dflt in [("stock", "INTEGER DEFAULT 0"),          # v12: лимит-товары
                       ("sold", "INTEGER DEFAULT 0"),
                       ("until_ts", "INTEGER DEFAULT 0"),      # v12: сезонные коллекции
@@ -464,7 +469,9 @@ def top_spent(limit=10):
 
 # --- уровни (косметика и престиж, не голда) ---
 
-LEVEL_COSTS = [100, 500, 2000, 10000, 50000]
+# v12.4: лестница до 10 ступеней — 10-й уровень открывает создание клана
+LEVEL_COSTS = [100, 500, 2000, 10000, 50000,
+               150000, 400000, 1000000, 2500000, 6000000]
 
 def upgrade_level(uid):
     """Атомарный апгрейд: списание cost + level+1 одним UPDATE.
@@ -615,18 +622,23 @@ def jackpot_active_players(since_ts):
 CLAN_CREATE_COST = 1000
 CLAN_JOIN_COST = 100
 
-def clan_create(uid, name):
-    """Создание клана: -1000 (сгорает). Создатель становится членом."""
+def clan_create(uid, name, link=None):
+    """Создание клана: -1000 (сгорает). Создатель становится членом.
+    v12.4: только с 10-го уровня профиля; имя = имя группы по ссылке."""
     name = (name or "").strip()
     if not (3 <= len(name) <= 24):
         return "Имя клана: от 3 до 24 символов"
+    u = get_user(uid)
+    if not u or (u["level"] or 0) < 10:
+        lv = (u["level"] or 0) if u else 0
+        return f"Создание клана — с 10-го уровня профиля (твой: {lv})"
     if one("SELECT user_id FROM clan_members WHERE user_id=?", (uid,)):
         return "Сначала выйди из текущего клана"
     if not burn_gold(uid, CLAN_CREATE_COST, "clan"):
         return f"Не хватает Голды: создание клана стоит {CLAN_CREATE_COST}"
     try:
-        cur = ex("INSERT INTO clans(name, owner, created) VALUES(?,?,?)",
-                 (name, uid, int(time.time())))
+        cur = ex("INSERT INTO clans(name, owner, link, created) VALUES(?,?,?,?)",
+                 (name, uid, link, int(time.time())))
     except sqlite3.IntegrityError:
         ex("UPDATE users SET spent = spent - ? WHERE id=?",
            (CLAN_CREATE_COST, uid))          # откат витрины тоже
@@ -653,6 +665,20 @@ def clan_join(uid, clan_id):
 
 def clan_leave(uid):
     ex("DELETE FROM clan_members WHERE user_id=?", (uid,))
+
+def next_clan_no():
+    """Номер для автоимени приватного клана (ссылка t.me/+код)."""
+    return one("SELECT COALESCE(MAX(id),0)+1 AS n FROM clans")["n"]
+
+def clan_delete(uid):
+    """v12.4: удаление клана владельцем. Участники выходят, 1000 G
+    за создание не возвращаются (сожжённая экономика)."""
+    c = one("SELECT id, name FROM clans WHERE owner=?", (uid,))
+    if not c:
+        return "Удалить клан может только его владелец"
+    ex("DELETE FROM clan_members WHERE clan_id=?", (c["id"],))
+    ex("DELETE FROM clans WHERE id=?", (c["id"],))
+    return None
 
 def my_clan(uid):
     return one("SELECT c.*, "
