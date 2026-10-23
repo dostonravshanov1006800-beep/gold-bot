@@ -663,7 +663,7 @@ def my_clan(uid):
 def clans_top(limit=10, since_ts=0):
     """Топ кланов: недельный счёт = сумма выигрышей членов (ledger gwin)."""
     return q(
-        "SELECT c.id, c.name, "
+        "SELECT c.id, c.name, c.owner, "
         "(SELECT COUNT(*) FROM clan_members m WHERE m.clan_id=c.id) members, "
         "COALESCE((SELECT SUM(l.delta) FROM ledger l "
         " JOIN clan_members m2 ON m2.user_id=l.user_id "
