@@ -53,6 +53,7 @@ BASK_PAY = {4: 1.7, 5: 2.3}      # с щитком (4) и чисто (5): p=0.2+
 BANNER_URL = "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/1a1fabe19_banner.jpg"  # баннер /start
 TASKS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/210f7351e_tasks_banner.jpg"   # баннер «Задания»
 PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6613f01a8_profile_banner.png"  # баннер «Профиль»
+GAMES_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6fff4abbf_bdcd06513_IMG_20261023_132641_866.jpg"  # баннер «Игры»
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -434,7 +435,7 @@ async def cb_games(c: CallbackQuery):
         [btn("Дартс", "g:dart", icon="target"), btn("Слоты", "g:slots", icon="spin")],
         [btn("Меню", "menu", icon="home")],
     )
-    await show(c, text, reply_markup=markup)
+    await open_banner(c, GAMES_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
