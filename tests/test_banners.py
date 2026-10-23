@@ -68,7 +68,8 @@ def test_every_banner_constant_is_used():
     for const in ["BANNER_URL", "TASKS_BANNER_URL", "PROFILE_BANNER_URL",
                   "GAMES_BANNER_URL", "SHOP_BANNER_URL", "BONUS_BANNER_URL",
                   "TOPUP_BANNER_URL", "REF_BANNER_URL",
-                  "TOP_BANNER_URL", "CASE_BANNER_URL"]:
+                  "TOP_BANNER_URL", "CASE_BANNER_URL",
+                  "CLAN_BANNER_URL", "EXCH_BANNER_URL"]:
         uses = src.count(const)
         assert uses >= 2, f"{const} определён, но не используется ({uses})"
 
@@ -179,3 +180,18 @@ def test_groups_do_not_delete_screens():
     finally:
         b.BOT = real_bot
         b.db.ex("DELETE FROM meta WHERE key LIKE 'screen:%'")
+
+
+def test_clan_screen_uses_clan_banner():
+    """v12.16: кнопка «Клан» — баннер КЛАН с текстом внутри фото."""
+    c = FakeCb()
+    asyncio.run(b.cb_clan(c))
+    assert c.message.sent[0][0] == "photo"
+    assert c.message.sent[0][1][0] == b.CLAN_BANNER_URL
+
+def test_exch_screen_uses_exch_banner():
+    """v12.16: кнопка «Обмен» — баннер ОБМЕН STARS с текстом внутри фото."""
+    c = FakeCb()
+    asyncio.run(b.cb_exch(c))
+    assert c.message.sent[0][0] == "photo"
+    assert c.message.sent[0][1][0] == b.EXCH_BANNER_URL

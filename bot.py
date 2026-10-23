@@ -60,6 +60,8 @@ REF_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/
 BONUS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/e2ce684be_bonus_banner.jpg"  # баннер «Бонусы»
 TOP_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/5bb14910a_0fab3ce48_IMG_20261023_223806_078.jpg"  # баннер «Топ» (v12.13)
 CASE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/64136b7d6_f1ea39639_IMG_20261023_223738_753.jpg"  # баннер «Кейсы» (v12.13)
+CLAN_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/85021e99d_7c08154c2_IMG_20261023_231911_532.jpg"  # баннер «Клан» (v12.16)
+EXCH_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/736a110c4_3ea85c5ca_IMG_20261023_231914_486.jpg"  # баннер «Обмен Stars» (v12.16)
 
 # карточки игр: изображение + подпись (единый премиальный золотой стиль)
 GAME_IMG = {
@@ -1141,7 +1143,8 @@ def clan_view(uid):
 
 @DP.callback_query(F.data == "clan")
 async def cb_clan(c: CallbackQuery):
-    await show(c, *clan_view(c.from_user.id))
+    text, markup = clan_view(c.from_user.id)
+    await open_banner(c, CLAN_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
@@ -1210,7 +1213,8 @@ def exch_view(uid):
 
 @DP.callback_query(F.data == "exch")
 async def cb_exch(c: CallbackQuery):
-    await show(c, *exch_view(c.from_user.id))
+    text, markup = exch_view(c.from_user.id)
+    await open_banner(c, EXCH_BANNER_URL, text, reply_markup=markup)
     await c.answer()
 
 
