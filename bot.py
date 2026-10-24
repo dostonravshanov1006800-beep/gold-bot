@@ -50,7 +50,7 @@ BOWL_PAY = {6: 4.8}              # страйк: p=1/6 -> RTP 0.80 (целево
 FOOT_PAY = {3: 1.0, 4: 1.2, 5: 1.8}   # ТРИ визуальных гола (3=в сетку низом,
     # 4=в угол, 5=девятка; подтверждено бросками): возврат, +20%, +80% -> RTP 0.80
 BASK_PAY = {4: 1.7, 5: 2.3}      # с щитком (4) и чисто (5): p=0.2+0.2 -> RTP 0.80
-BANNER_URL = "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/1a1fabe19_banner.jpg"  # баннер /start
+BANNER_URL = "https://media.base44.com/images/public/6ad9124e6fe14fca68f0c8ce/46c8484e7_d90061f29_IMG_20261024_162838_216.jpg"  # баннер /start «FUN GAMES» (Достон, 24.10), прямая ссылка для inline
 TASKS_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/210f7351e_tasks_banner.jpg"   # баннер «Задания»
 PROFILE_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6613f01a8_profile_banner.png"  # баннер «Профиль»
 GAMES_BANNER_URL = "https://base44.app/api/apps/6ad9124e6fe14fca68f0c8ce/files/mp/public/6ad9124e6fe14fca68f0c8ce/6fff4abbf_bdcd06513_IMG_20261023_132641_866.jpg"  # баннер «Игры»
