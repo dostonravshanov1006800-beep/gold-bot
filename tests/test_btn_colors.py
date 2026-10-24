@@ -48,7 +48,7 @@ def test_destructive_admin_ops_danger(m):
 def test_url_and_inline_buttons_colored(m):
     b1 = m.btn("Играть", None, url="https://t.me/x")
     b2 = m.btn("Пригласить друга", None, switch_inline="invite")
-    b3 = m.btn("Открыть Funapp", "tx:none", url="https://t.me/x")
+    b3 = m.btn("Открыть Fun Games", "tx:none", url="https://t.me/x")
     for b in (b1, b2, b3):
         assert b.style in ("primary", "success", "danger")
 

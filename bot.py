@@ -909,7 +909,7 @@ async def on_inline(q: InlineQuery):
     """Карточка приглашения «via @бот»: фото + подпись + кнопка с ref-ID отправителя."""
     uid = q.from_user.id
     caption = (
-        f"{pe('games')} <b>Funapp</b> — играй и зарабатывай Голду!\n"
+        f"{pe('games')} <b>Fun Games</b> — играй и зарабатывай Голду!\n"
         f"Обмен на NFT-подарки и TG Premium.\n"
         f"Заходи по моей ссылке и забирай бонус {pe('gift')}"
     )
@@ -1641,7 +1641,7 @@ async def cb_pay(c: CallbackQuery):
     db.upsert_user(uid, c.from_user.username)
     await c.message.answer_invoice(
         title=f"{fg(gold_amt)} Голды",
-        description=f"Пополнение Funapp на {fg(gold_amt)} G",
+        description=f"Пополнение Fun Games на {fg(gold_amt)} G",
         payload=f"topup:{gold_amt}",
         provider_token="",
         currency="XTR",
@@ -1686,7 +1686,7 @@ async def custom_topup_amount(m: Message):
     pct = topup_bonus_pct(stars)
     await m.answer_invoice(
         title=f"{fg(gold_amt)} Голды",
-        description=f"Пополнение Funapp на {fg(gold_amt)} G"
+        description=f"Пополнение Fun Games на {fg(gold_amt)} G"
                     + (f" (бонус +{pct}%)" if pct else ""),
         payload=f"topup:{gold_amt}",
         provider_token="",
@@ -2077,7 +2077,7 @@ def reference_caption():
         f"{pe('crown')} <b>Топ и Банк</b>: по топу розыгрыш Банка — топ-3 крупные доли.",
         f"{pe('wave')} <b>Рефералы</b>: /referrals — +25 G за друга.",
     ]
-    return f"{pe('info')} <b>Funapp · Справочник</b>\n" + "\n".join(L)
+    return f"{pe('info')} <b>Fun Games · Справочник</b>\n" + "\n".join(L)
 
 
 def reference_pack():
@@ -2085,12 +2085,12 @@ def reference_pack():
     Используется в /help и вторым сообщением в /start."""
     bq = lambda t, h: f"<blockquote expandable><b>{h}</b>\n{t}</blockquote>"
     return (
-        f"{pe('info')} <b>Funapp · Справочник</b>\n\n"
+        f"{pe('info')} <b>Fun Games · Справочник</b>\n\n"
         + bq("Обновление «Новая экономика»: дуэли, кейсы, уровни, кланы, "
            "джекпот, витрина богатства и лимит-товары. "
            "Подробности — в разделах ниже.",
            f"{pe('party')} Что нового")
-        + "\n" + bq("Валюта Funapp — Голда. Баланс: /balance · кнопки меню — под каждым сообщением. "
+        + "\n" + bq("Валюта Fun Games — Голда. Баланс: /balance · кнопки меню — под каждым сообщением. "
            "В профиле — баланс, друзья и личная ссылка.",
            f"{pe('wallet')} Баланс и профиль")
         + "\n" + bq("Футбол · Баскетбол · Боулинг · Кубы · Дартс · Слоты.\n"
@@ -2951,7 +2951,7 @@ async def reply_transfer(m: Message):
     if not db.get_user(src.id):
         msg = await m.reply(
             f"{pe('sad')} {html.escape(name_b)}, получатель ещё не запускал бота",
-            reply_markup=kb([btn("Открыть Funapp", "tx:none", url=f"https://t.me/{ME}")]))
+            reply_markup=kb([btn("Открыть Fun Games", "tx:none", url=f"https://t.me/{ME}")]))
         await _tx_auto_delete(msg)
         return
     db.upsert_user(uid, m.from_user.username)

@@ -41,7 +41,7 @@ def test_inline_card_has_photo_caption_reflink():
     card = results[0]
     assert card.type == "photo"
     assert card.photo_url and card.photo_url.startswith("https://")
-    assert "Funapp" in card.caption and "Голду" in card.caption
+    assert "Fun Games" in card.caption and "Голду" in card.caption
     url = card.reply_markup.inline_keyboard[0][0].url
     assert url == "https://t.me/funapp_game?start=ref_42"
     assert kw.get("is_personal") is True and kw.get("cache_time") == 0

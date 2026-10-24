@@ -555,7 +555,7 @@ CASE_POOL = [  # (kind, value, rarity, вес)
     ("color", "Цвет имени «Изумруд»", "common", 25),
     ("color", "Цвет имени «Рубин»", "rare", 12),
     ("color", "Цвет имени «Аметист»", "epic", 4),
-    ("title", "Титул «Легенда Funapp»", "legend", 1),
+    ("title", "Титул «Легенда Fun Games»", "legend", 1),
 ]
 
 def has_cosmetic(uid, kind, value):
