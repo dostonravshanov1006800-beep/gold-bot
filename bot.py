@@ -191,7 +191,7 @@ def pe(key):
 # Кейс+Клан синие, Справочник красный.
 BTN_PRIMARY = {"games", "g", "cube", "stake", "jackpot", "lvl", "tchk",
                "ctop", "case", "clan", "topspent", "shop"}
-BTN_DANGER = {"refguide", "buy", "exch"}
+BTN_DANGER = {"refguide", "buy", "exch", "top"}
 BTN_SUCCESS_FULL = {"tasks", "profile", "bonus", "topup",
                    "bonus:claim", "case:open", "exch:go", "clan:new", "duel"}
 BTN_STYLE_OVERRIDES = {}      # точные data → style (при особых случаях)

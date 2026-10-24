@@ -23,7 +23,7 @@ def test_games_and_sections_primary(m):
 
 
 def test_money_flows_danger(m):
-    for data in ("refguide", "buy:3", "exch"):
+    for data in ("refguide", "buy:3", "exch", "top"):
         assert m.btn("X", data).style == "danger", data
 
 
@@ -34,7 +34,7 @@ def test_claim_actions_success(m):
 
 
 def test_navigation_neutral(m):
-    for data in ("menu", "top", "tx:ok", "sub",
+    for data in ("menu", "tx:ok", "sub",
                  "a:users", "gset:-100:1:2", "adm:reset"):
         assert m.btn("X", data).style is None, data
 
