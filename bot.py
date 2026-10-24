@@ -198,39 +198,41 @@ BTN_STYLE_OVERRIDES = {}      # точные data → style (при особых
 
 
 def _btn_style(data):
-    """Цвет кнопки по callback-data (v12.21). None = нейтральная."""
+    """Цвет кнопки по callback-data. v12.24: БЕЗ ЦВЕТНЫХ КНОПОК НЕ
+    ОСТАЁТСЯ — всё, что не попало в зелёные/красные, синее."""
     if data in BTN_STYLE_OVERRIDES:
         return BTN_STYLE_OVERRIDES[data]
     tok = (data or "").split(":")[0]
     if data in BTN_SUCCESS_FULL or tok in BTN_SUCCESS_FULL:
         return "success"
+    if data == "adm:reset" or (data or "").startswith("adm:take"):
+        return "danger"               # разрушительные админ-операции
     if tok in BTN_DANGER:
         return "danger"
-    if tok in BTN_PRIMARY:
-        return "primary"
-    return None
+    return "primary"
 
 
 def btn(text, data, icon=None, *, url=None, switch_inline=None, style=None):
     """Кнопка. Премиум-иконка — только в премиум-режиме, иначе чистый текст.
     url — ссылка; switch_inline — открыть выбор чата с подстановкой @бот <query>.
     style — цвет (primary/success/danger), по умолчанию авто по данным."""
+    st = style or _btn_style(data)
     if url:
         if icon and PREMIUM_UI:
             return InlineKeyboardButton(
-                text=text, url=url, icon_custom_emoji_id=ICONS[icon][1]
+                text=text, url=url, icon_custom_emoji_id=ICONS[icon][1],
+                style=st
             )
-        return InlineKeyboardButton(text=text, url=url)
+        return InlineKeyboardButton(text=text, url=url, style=st)
     if switch_inline is not None:
-        return InlineKeyboardButton(text=text, switch_inline_query=switch_inline)
-    st = style or _btn_style(data)
+        return InlineKeyboardButton(text=text, switch_inline_query=switch_inline,
+                                    style=st)
     if icon and PREMIUM_UI:
         return InlineKeyboardButton(
             text=text, callback_data=data, icon_custom_emoji_id=ICONS[icon][1],
-            **({"style": st} if st else {})
+            style=st
         )
-    return InlineKeyboardButton(
-        text=text, callback_data=data, **({"style": st} if st else {}))
+    return InlineKeyboardButton(text=text, callback_data=data, style=st)
     return InlineKeyboardButton(text=text, callback_data=data)
 
 

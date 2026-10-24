@@ -33,10 +33,24 @@ def test_claim_actions_success(m):
         assert m.btn("X", data).style == "success", data
 
 
-def test_navigation_neutral(m):
-    for data in ("menu", "tx:ok", "sub",
-                 "a:users", "gset:-100:1:2", "adm:reset"):
-        assert m.btn("X", data).style is None, data
+def test_navigation_all_colored(m):
+    """v12.24: НЕЙТРАЛЬНЫХ КНОПОК БОЛЬШЕ НЕТ — вся навигация синяя."""
+    for data in ("menu", "tx:ok", "sub", "refcopy", "a:users",
+                 "gset:-100:1:2", "adm:cancel"):
+        assert m.btn("X", data).style == "primary", data
+
+
+def test_destructive_admin_ops_danger(m):
+    for data in ("adm:reset", "adm:take:500", "adm:take:all"):
+        assert m.btn("X", data).style == "danger", data
+
+
+def test_url_and_inline_buttons_colored(m):
+    b1 = m.btn("Играть", None, url="https://t.me/x")
+    b2 = m.btn("Пригласить друга", None, switch_inline="invite")
+    b3 = m.btn("Открыть Funapp", "tx:none", url="https://t.me/x")
+    for b in (b1, b2, b3):
+        assert b.style in ("primary", "success", "danger")
 
 
 def test_explicit_style_overrides(m):
@@ -56,4 +70,4 @@ def test_every_callback_button_valid_style(m):
              "profile", "tasks", "top", "jackpot", "refguide", "duel:1",
              "lvl", "tx:ok", "a:bc", "adm:take:500"]
     for d in datas:
-        assert m.btn("X", d).style in (None, "primary", "success", "danger"), d
+        assert m.btn("X", d).style in ("primary", "success", "danger"), d
