@@ -186,10 +186,14 @@ def pe(key):
 # Синие — игры и активности, зелёные — «забрать/открыть/создать»,
 # красные — деньги и покупки, остальные — нейтральные (навигация).
 # Явный style= в btn() перекрывает авто-цвет.
-BTN_PRIMARY = {"games", "g", "cube", "stake", "jackpot", "lvl", "tasks",
-               "tchk", "ctop", "case", "bonus", "clan", "topspent"}
-BTN_DANGER = {"topup", "shop", "buy", "exch"}
-BTN_SUCCESS_FULL = {"bonus:claim", "case:open", "exch:go", "clan:new", "duel"}
+# Расклад Достона (24.10, по скрину главного меню):
+# Задания+Профиль зелёные, Игры+Магазин синие, Бонус+Пополнить зелёные,
+# Кейс+Клан синие, Справочник красный.
+BTN_PRIMARY = {"games", "g", "cube", "stake", "jackpot", "lvl", "tchk",
+               "ctop", "case", "clan", "topspent", "shop"}
+BTN_DANGER = {"refguide", "buy", "exch"}
+BTN_SUCCESS_FULL = {"tasks", "profile", "bonus", "topup",
+                   "bonus:claim", "case:open", "exch:go", "clan:new", "duel"}
 BTN_STYLE_OVERRIDES = {}      # точные data → style (при особых случаях)
 
 

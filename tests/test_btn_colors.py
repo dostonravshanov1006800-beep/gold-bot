@@ -18,22 +18,23 @@ def m():
 
 def test_games_and_sections_primary(m):
     for data in ("games", "g:football", "g:slots", "cube:lo", "jackpot",
-                 "tasks", "tchk:5", "case", "clan", "lvl"):
+                 "tchk:5", "case", "clan", "lvl", "shop"):
         assert m.btn("X", data).style == "primary", data
 
 
 def test_money_flows_danger(m):
-    for data in ("topup", "shop", "buy:3", "exch"):
+    for data in ("refguide", "buy:3", "exch"):
         assert m.btn("X", data).style == "danger", data
 
 
 def test_claim_actions_success(m):
-    for data in ("bonus:claim", "case:open", "exch:go", "clan:new", "duel:77"):
+    for data in ("bonus:claim", "case:open", "exch:go", "clan:new", "duel:77",
+                 "tasks", "profile", "bonus", "topup"):
         assert m.btn("X", data).style == "success", data
 
 
 def test_navigation_neutral(m):
-    for data in ("menu", "profile", "refguide", "top", "tx:ok", "sub",
+    for data in ("menu", "top", "tx:ok", "sub",
                  "a:users", "gset:-100:1:2", "adm:reset"):
         assert m.btn("X", data).style is None, data
 
