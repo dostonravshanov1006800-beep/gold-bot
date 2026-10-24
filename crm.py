@@ -680,8 +680,16 @@ def setup(ctx):
                 return
             await c.answer("Отправляю…")
             await c.message.edit_text(f"{pe('clock')} Рассылка идёт…")
-            ok, total = await broadcast_all(st["text"])
-            await redraw(*st["msg"], "bc", f"{pe('check')} Рассылка: доставлено {ok}/{total}")
+            ok, total, why = await broadcast_all(st["text"])
+            msg = f"{pe('check')} Рассылка: доставлено {ok}/{total}"
+            if ok < total:
+                if why["blocked"]:
+                    msg += f"\n{pe('cross')} Заблокировали бота: {why['blocked']}"
+                if why["no_chat"]:
+                    msg += f"\n{pe('cross')} Не начинали ЛС: {why['no_chat']}"
+                if why["other"]:
+                    msg += f"\n{pe('cross')} Прочие ошибки: {why['other']}"
+            await redraw(*st["msg"], "bc", msg)
         else:
             await c.answer()
 

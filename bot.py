@@ -15,7 +15,8 @@ import time
 import db
 from aiogram import Bot, Dispatcher, F
 from aiogram.dispatcher.event.bases import SkipHandler
-from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter, TelegramBadRequest
+from aiogram.exceptions import (TelegramAPIError, TelegramRetryAfter,
+                                 TelegramBadRequest, TelegramForbiddenError)
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
                            BotCommandScopeChat, ChatMemberUpdated, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -1896,21 +1897,43 @@ async def broadcast_groups(text: str) -> tuple:
 
 
 async def broadcast_all(text: str, chat_to_notify=None) -> tuple:
-    """Рассылка всем: HTML (премиум-эмодзи <tg-emoji>), при ошибке — чистый текст."""
+    """v12.29: рассылка ВСЕМ юзерам из базы. HTML (премиум <tg-emoji>),
+    при ошибке — чистый текст. Флуд (RetryAfter): пауза и повтор.
+    Возвращает (ok, total, reasons): blocked — юзер заблокировал бота,
+    no_chat — юзер не начинал ЛС (Telegram запрещает писать первыми),
+    other — прочие ошибки. Недоставленные НЕ удаляются из базы: как
+    только напишут боту, получат следующие рассылки."""
     ok = 0
+    reasons = {"blocked": 0, "no_chat": 0, "other": 0}
     ids = db.all_user_ids()
     for uid in ids:
-        try:
-            await BOT.send_message(uid, text, parse_mode="HTML")
+        got, why = False, None
+        for pm in ("HTML", None):
+            for _attempt in (0, 1):        # RetryAfter -> ждём и повторяем
+                try:
+                    await BOT.send_message(uid, text, parse_mode=pm)
+                    got = True
+                    break
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(int(e.retry_after or 1) + 1)
+                except TelegramForbiddenError:
+                    why = "blocked"
+                    break
+                except TelegramAPIError as e:
+                    s = str(e).lower()
+                    if "initiate conversation" in s or "chat not found" in s:
+                        why = "no_chat"
+                        break
+                    why = "other"          # HTML сломался — пробуем чистый текст
+                    break
+            if got or why in ("blocked", "no_chat"):
+                break
+        if got:
             ok += 1
-        except TelegramAPIError:
-            try:
-                await BOT.send_message(uid, text, parse_mode=None)
-                ok += 1
-            except TelegramAPIError:
-                pass
+        else:
+            reasons[why or "other"] += 1
         await asyncio.sleep(0.05)
-    return ok, len(ids)
+    return ok, len(ids), reasons
 
 
 @DP.message(Command("broadcast"))
@@ -1921,8 +1944,19 @@ async def cmd_broadcast(m: Message):
         await m.answer("Формат: /broadcast текст сообщения")
         return
     await m.answer(f"Рассылка для {len(db.all_user_ids())} пользователей...")
-    ok, total = await broadcast_all(text[1])
-    await m.answer(f"{pe('check')} Доставлено: {ok}/{total}")
+    ok, total, why = await broadcast_all(text[1])
+    r = f"{pe('check')} Доставлено: <b>{ok}/{total}</b>"
+    if ok < total:
+        parts = []
+        if why["blocked"]:
+            parts.append(f"заблокировали бота — <b>{why['blocked']}</b>")
+        if why["no_chat"]:
+            parts.append(f"не начинали ЛС — <b>{why['no_chat']}</b>")
+        if why["other"]:
+            parts.append(f"прочие ошибки — <b>{why['other']}</b>")
+        r += (f"\n{pe('cross')} Не получили: " + "; ".join(parts) +
+              "\nКак только напишут боту /start — начнут получать рассылки.")
+    await m.answer(r, parse_mode="HTML")
 
 
 @DP.message(Command("stats"))
