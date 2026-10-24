@@ -2195,7 +2195,8 @@ ADMIN_RESET_RE = re.compile(r"^сброс(?:ить)? вс[её]$", re.I)
 async def admin_mass_ops(m: Message):
     """Текстовые команды админа в ЛС (v12.19):
     «отнять у всех 5000» / «отнять у всех всё» — изъять голду у всех;
-    «сбросить всё» — обнулить балансы, клан-пул и джекпот.
+    «сбросить всё» — заводской сброс (v12.28): ВСЁ до чистого листа,
+    остаются только пользователи, группы и админы.
     Перед выполнением — подтверждение кнопкой (необратимо)."""
     if not is_admin(m.from_user.id):
         raise SkipHandler
@@ -2219,16 +2220,19 @@ async def admin_mass_ops(m: Message):
         markup = kb([btn("Подтверждаю изъятие", "adm:take:" + (str(amount) if amount else "all"), "check"),
                      btn("Отмена", "adm:cancel", "back")])
     else:
-        ug = db.one("SELECT COALESCE(SUM(gold),0) AS s, COUNT(*) AS n "
-                    "FROM users WHERE gold > 0")
+        ug = db.one("SELECT COUNT(*) AS n, COALESCE(SUM(gold),0) AS s FROM users")
         cp, jp = db.clan_pool(), db.jackpot_pool()
-        text = (f"{pe('warn')} <b>Полный сброс голды</b>\n\n"
-                f"Обнулятся:\n"
+        text = (f"{pe('warn')} <b>Заводской сброс — бот как новый</b>\n\n"
+                f"Сотрётся полностью:\n"
                 f"· балансы <b>{fg(ug['n'])}</b> юзеров — <b>{fg(ug['s'])} {pe('coin')}</b>\n"
-                f"· пул войны кланов — <b>{fg(cp)} {pe('coin')}</b>\n"
-                f"· джекпот — <b>{fg(jp)} {pe('coin')}</b>\n\n"
-                f"{pe('cross')} Тотальное обнуление против инфляции. "
-                "Уровни и витрина трат не трогаются. Необратимо.")
+                f"· уровни, витрина трат, достижения\n"
+                f"· задания, инвентарь, косметика, кейсы\n"
+                f"· кланы, дуэли, обмены, статистика игр\n"
+                f"· промокоды, гифты, заявки, история платежей и переводов\n"
+                f"· пул войны кланов — <b>{fg(cp)}</b> · джекпот — <b>{fg(jp)} {pe('coin')}</b>\n\n"
+                f"Останутся: <b>пользователи</b>, группы, админы, курс Stars.\n\n"
+                f"{pe('cross')} Бот станет как новый — чистый лист. "
+                "Операция необратима.")
         markup = kb([btn("Сбросить всё", "adm:reset", "check"),
                      btn("Отмена", "adm:cancel", "back")])
     await m.answer(text, reply_markup=markup, parse_mode="HTML")
@@ -2256,15 +2260,20 @@ async def cb_adm_mass(c: CallbackQuery):
         await c.answer("Голда изъята")
         return
     if act == "reset":
-        r = db.reset_all_gold()
+        r = db.factory_reset()
+        rows = sum(v for k, v in r.items() if k not in ("users", "gold"))
         await c.message.edit_text(
-            f"{pe('check')} <b>Сброс выполнен</b>\n\n"
-            f"Балансы: {fg(r['users'])} юзеров — {fg(r['gold'])} {pe('coin')}\n"
-            f"Клан-пул: {fg(r['clans'])} {pe('coin')}\n"
-            f"Джекпот: {fg(r['jackpot'])} {pe('coin')}\n"
-            f"Всего обнулено: <b>{fg(r['gold'] + r['clans'] + r['jackpot'])} {pe('coin')}</b>",
+            f"{pe('check')} <b>Заводской сброс выполнен</b>\n\n"
+            f"Пользователи: <b>{fg(r['users'])}</b> — обнулено "
+            f"<b>{fg(r['gold'])} {pe('coin')}</b>\n"
+            f"Стерто записей всего: <b>{fg(rows)}</b> — задания, кланы, дуэли, "
+            f"инвентарь, история, статистика\n"
+            f"Клан-пул: {fg(db.clan_pool())} · Джекпот: "
+            f"{fg(db.jackpot_pool())} {pe('coin')}\n\n"
+            f"Бот как новый: юзеры и группы на месте, всё остальное — "
+            f"чистый лист.",
             parse_mode="HTML")
-        await c.answer("Сброшено")
+        await c.answer("Сброшено до заводских")
         return
     await c.answer()
 

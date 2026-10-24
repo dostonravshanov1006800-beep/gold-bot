@@ -330,6 +330,29 @@ def reset_all_gold():
         log_econ(0, -tot, "reset")
     return {"users": ug["n"], "gold": ug["s"], "clans": cp, "jackpot": jp}
 
+def factory_reset():
+    """v12.28: заводской сброс — бот «как новый». Стирается всё: балансы,
+    уровни, задания, инвентарь, косметика, кланы, дуэли, обмены, промокоды,
+    гифты, заявки, история платежей/переводов, статистика, пулы и джекпот.
+    ОСТАЮТСЯ: сами пользователи (id, имя), зарегистрированные группы,
+    админы, курс Stars. Возвращает словарь со статистикой сброса."""
+    wiped = {}
+    for t in ("user_tasks", "tasks", "items", "giveaways", "requests",
+              "promos", "promo_used", "transfers", "group_stats",
+              "updates_log", "payments", "ledger", "cosmetics", "duels",
+              "clans", "clan_members", "exchanges", "game_stats", "rate_log"):
+        wiped[t] = (one(f"SELECT COUNT(*) AS n FROM {t}") or {"n": 0})["n"]
+        ex(f"DELETE FROM {t}")
+    ug = one("SELECT COUNT(*) AS n, COALESCE(SUM(gold),0) AS g FROM users")
+    ex("UPDATE users SET gold=0, ref_by=NULL, ref_paid=0, last_bonus=0,"
+       " games_played=0, games_won=0, games_lost=0, total_won=0,"
+       " level=0, spent=0")
+    put_meta("clan_pool", "0")
+    put_meta("jackpot_pool", "0")
+    wiped["users"], wiped["gold"] = ug["n"], ug["g"]
+    return wiped
+
+
 def zero_gold(uid):
     """Полное обнуление баланса юзера. Возвращает прежний баланс или None."""
     r = one("SELECT gold FROM users WHERE id=?", (uid,))

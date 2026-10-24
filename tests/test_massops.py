@@ -86,21 +86,34 @@ def test_take_all_everything(m):
     assert m.db.get_user(3)["gold"] == 0
 
 
-def test_reset_all_zeroes_every_pool(m):
+def test_factory_reset_wipes_everything(m):
+    """v12.28: «сбросить всё» — заводской сброс: чистый лист, юзеры остаются."""
     m.db.add_gold(2, 777)
     m.db.jackpot_add(100)
     m.db.put_meta("clan_pool", "200")
     h = handler(m, "admin_mass_ops")
     msg = Msg(1, "сбросить всё")
     run(h(msg))
-    assert "Полный сброс" in msg.out[0] and "777" in msg.out[0]
+    assert "Заводской сброс" in msg.out[0] and "777" in msg.out[0]
+    assert "пользователи" in msg.out[0]                # что останется — названо
     cbh = handler(m, "cb_adm_mass")
     cb = CB(1, "adm:reset", Msg(1, ""))
     run(cbh(cb))
+    assert "Заводской сброс выполнен" in cb.message.out[0]
+    # балансы и пулы обнулены
     assert m.db.get_user(2)["gold"] == 0
     assert m.db.jackpot_pool() == 0
     assert m.db.clan_pool() == 0
-    assert "1 077" in cb.message.out[0]                # 777+100+200
+    # история/журналы/статистика стерты
+    assert m.db.q("SELECT * FROM ledger") == []
+    assert m.db.q("SELECT * FROM rate_log") == []
+    assert m.db.q("SELECT * FROM game_stats") == []
+    assert m.db.q("SELECT * FROM duels") == []
+    assert m.db.q("SELECT * FROM clans") == []
+    # сами пользователи остались, параметры — заводские
+    u = m.db.get_user(2)
+    assert u is not None and u["gold"] == 0 and (u["level"] or 0) == 0
+    assert u["spent"] == 0 and (u["games_played"] or 0) == 0
 
 
 def test_cancel_keeps_balances(m):
@@ -126,5 +139,9 @@ def test_stranger_and_unrelated_text_ignored(m):
 
 
 def test_ledger_records_burn(m):
+    h = handler(m, "admin_mass_ops")
+    run(h(Msg(1, "отнять у всех всё")))
+    cbh = handler(m, "cb_adm_mass")
+    run(cbh(CB(1, "adm:take:all", Msg(1, ""))))
     rows = m.db.q("SELECT * FROM ledger WHERE kind='takeall' OR kind='reset'")
     assert rows, "изъятия пишутся в эконом-журнал"
