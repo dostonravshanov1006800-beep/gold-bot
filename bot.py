@@ -1,4 +1,6 @@
 import asyncio
+import contextvars
+import i18n
 import hashlib
 import html
 import json
@@ -186,6 +188,22 @@ def pe(key):
     return e
 
 
+# ---------- v12.32: RU/UZ (i18n) ----------
+UZ_CTX = contextvars.ContextVar("uz_mode", default=False)
+
+def _uz(uid):
+    try:
+        u = db.get_user(uid)
+        return bool(u) and u["lang"] == "uz"
+    except Exception:
+        return False
+
+def _uzc(c):
+    return _uz(getattr(getattr(c, "from_user", None), "id", None))
+
+def _uzm(m):
+    return _uz(getattr(getattr(m, "from_user", None), "id", None))
+
 # ---------- v12.21: цветные кнопки (Bot API 9.4, style) ----------
 # Синие — игры и активности, зелёные — «забрать/открыть/создать»,
 # красные — деньги и покупки, остальные — нейтральные (навигация).
@@ -217,6 +235,8 @@ def _btn_style(data):
 
 
 def btn(text, data, icon=None, *, url=None, switch_inline=None, style=None):
+    if UZ_CTX.get():
+        text = i18n.uz_text(text)
     """Кнопка. Премиум-иконка — только в премиум-режиме, иначе чистый текст.
     url — ссылка; switch_inline — открыть выбор чата с подстановкой @бот <query>.
     style — цвет (primary/success/danger), по умолчанию авто по данным."""
@@ -252,6 +272,13 @@ def is_admin(uid):
     return uid in ADMIN_IDS
 
 
+def lang_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="Русский 🇷🇺", callback_data="setlang:ru")
+    b.button(text="O'zbek 🇺🇿", callback_data="setlang:uz")
+    b.adjust(1)
+    return b.as_markup()
+
 def menu_kb(gold=0):
     return kb(
         [btn("Задания", "tasks", icon="tasks"), btn("Профиль", "profile", icon="wallet")],
@@ -259,7 +286,7 @@ def menu_kb(gold=0):
         [btn("Бонус", "bonus", icon="gift"), btn("Пополнить", "topup", icon="stars")],
         [btn("Кейс", "case", icon="present"), btn("Клан", "clan", icon="people")],
         [btn("Обмен на Stars", "exch", icon="star"), btn("Топ", "top", icon="trophy")],
-        [btn("Справочник", "refguide", icon="info")],
+        [btn("Справочник", "refguide", icon="info"), btn("Til / Язык", "lang")],
     )
 
 
@@ -295,6 +322,8 @@ async def open_banner(c: CallbackQuery, url: str, text: str, reply_markup=None):
     # ловился общим except и фолбэк show() отправлял текст ЕЩЁ РАЗ отдельным
     # сообщением (скрин 22:42). Теперь: фото+подпись единым пузырём,
     # недоступное для удаления старое сообщение просто остаётся.
+    if _uzc(c):
+        text = i18n.uz_text(text)
     try:
         # v12.17: лимит Telegram считается по ВИДИМЫМ знакам, а не по HTML:
         # теги <tg-emoji>/<b> раздували строку в 1,5-2 раза и подпись
@@ -322,6 +351,8 @@ async def show(c: CallbackQuery, text, reply_markup=None):
     и кнопка «зависала» (22.10, скрин 18:14). Теперь:
       фото -> edit_caption (лимит подписи 1024; длиннее — шлём новым сообщением),
       текст -> edit_text, «message is not modified» — штатно игнорируем."""
+    if _uzc(c):
+        text = i18n.uz_text(text)
     msg = c.message
     try:
         if msg.photo:
@@ -413,6 +444,25 @@ async def cmd_start(m: Message, command: CommandStart):
         # Игры/Магазин/Бонус/Пополнить/Топ/Справочник)
         # В группах меню не нужно: там всё работает текстом («футбол 100»).
 
+
+@DP.message(Command("lang"))
+async def cmd_lang(m: Message):
+    await safe_reply(m, "🌐 <b>Til / Язык</b>\n\n"
+                       "Tilni tanlang · Выберите язык:",
+                     reply_markup=lang_kb())
+
+@DP.callback_query(F.data == "lang")
+async def cb_lang(c: CallbackQuery):
+    await show(c, "🌐 <b>Til / Язык</b>\n\nTilni tanlang · Выберите язык:",
+               reply_markup=lang_kb())
+    await c.answer()
+
+@DP.callback_query(F.data.startswith("setlang:"))
+async def cb_setlang(c: CallbackQuery):
+    lang = c.data.split(":")[1]
+    db.set_lang(c.from_user.id, lang)
+    await c.answer("Til: o'zbekcha ✅" if lang == "uz" else "Язык: русский ✅")
+    await cb_menu(c)
 
 @DP.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery):
@@ -628,6 +678,8 @@ def cd_check(key, delay=None):
 
 async def safe_reply(m, text, **kw):
     """Reply без падения: flood-wwait пережидаем, нет прав — молча."""
+    if _uzm(m):
+        text = i18n.uz_text(text)
     try:
         return await m.reply(text, **kw)
     except TelegramRetryAfter as e:
@@ -2123,7 +2175,7 @@ def reference_pack():
         f"{pe('info')} <b>Fun Games · Справочник</b>\n\n"
         + bq("Обновление «Новая экономика»: дуэли, кейсы, уровни, кланы, "
            "джекпот, витрина богатства и лимит-товары. "
-           "Весь интерфейс переехал на анимированные эмодзи "
+           "Бот двуязычный: «Til / Язык» → O'zbek 🇺🇿 или /lang. Весь интерфейс переехал на анимированные эмодзи "
            "«RestrictedEmoji» — приятнее смотреть. "
            "Подробности — в разделах ниже.",
            f"{pe('party')} Что нового")
@@ -2559,6 +2611,14 @@ async def main():
             except Exception as e:
                 logging.warning("heartbeat watchdog: %s", e)
             await asyncio.sleep(240)
+    async def _uz_ctx_mw(handler, event, data):
+        try:
+            fu = getattr(event, "from_user", None)
+            UZ_CTX.set(bool(fu and _uz(fu.id)))
+        except Exception:
+            UZ_CTX.set(False)
+        return await handler(event, data)
+    DP.update.outer_middleware(_uz_ctx_mw)
     DP.update.outer_middleware(_mark_update_seen)   # v12.12: маркер слуха
     asyncio.create_task(heartbeat())
     asyncio.create_task(jackpot_draw_loop())

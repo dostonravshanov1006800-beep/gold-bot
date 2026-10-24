@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users(
     ref_by INTEGER,
     ref_paid INTEGER DEFAULT 0,
     last_bonus INTEGER DEFAULT 0,
-    joined INTEGER
+    joined INTEGER,
+    lang TEXT DEFAULT 'ru'
 );
 CREATE TABLE IF NOT EXISTS tasks(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +191,10 @@ def init():
             _conn.execute(f"ALTER TABLE groups ADD COLUMN {col} {dflt}")
         except sqlite3.OperationalError:
             pass
+    try:
+        _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'ru'")
+    except sqlite3.OperationalError:
+        pass                                    # v12.32: RU/UZ язык юзера
     for col, dflt in [("games_played", "INTEGER DEFAULT 0"),
                       ("games_won", "INTEGER DEFAULT 0"),
                       ("games_lost", "INTEGER DEFAULT 0"),
@@ -1133,3 +1138,8 @@ def get_meta(key):
 def put_meta(key, value):
     """Служебные метки (сердцебиение, состояние) — на вид снаружи, через коммиты bot.db."""
     ex("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+
+
+# v12.32: RU/UZ — язык интерфейса на юзера
+def set_lang(uid, lang):
+    one("UPDATE users SET lang=? WHERE id=?", (lang, uid))
