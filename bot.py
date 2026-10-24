@@ -417,15 +417,13 @@ async def cb_menu(c: CallbackQuery):
     wt = welcome_text(c.from_user.first_name or "друг")
     mk = menu_kb(u["gold"])
     if c.message.photo:
-        # с экрана-баннера: текст в подписи не заменить на целое меню —
-        # баннер убираем, меню приходит свежим сообщением
-        try:
-            await c.message.delete()
-        except TelegramAPIError:
-            pass
-        await BOT.send_message(c.message.chat.id, wt, reply_markup=mk)
-    else:
+        # v12.30: с экрана-баннера баннер ОСТАЁТСЯ — правим подпись и
+        # кнопки на месте (edit_caption), никакого удаления
         await show(c, wt, reply_markup=mk)
+    else:
+        # v12.30: с текстового экрана (баланс и т.п.) — превращаем экран
+        # обратно в баннер /start с меню в подписи
+        await open_banner(c, BANNER_URL, wt, reply_markup=mk)
     await c.answer()
 
 

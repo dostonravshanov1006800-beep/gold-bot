@@ -159,3 +159,52 @@ def test_custom_topup_skips_without_state():
         raise AssertionError("должен был кидать SkipHandler")
     except SkipHandler:
         pass
+
+
+def test_menu_keeps_banner_and_restores_it():
+    """v12.30: «Меню» с баннера его НЕ удаляет (правится подпись),
+    а с текстового экрана — возвращает баннер /start."""
+    import asyncio
+    from types import SimpleNamespace
+
+    class FakeMsg:
+        def __init__(self, photo):
+            self.photo = photo
+            self.chat = SimpleNamespace(type="private", id=55)
+            self.calls = []
+        async def edit_caption(self, caption=None, reply_markup=None):
+            self.calls.append(("caption", caption))
+        async def edit_text(self, text, **kw):
+            self.calls.append(("text", text))
+        async def answer(self, text, **kw):
+            self.calls.append(("answer", text))
+        async def answer_photo(self, url, caption=None, reply_markup=None):
+            self.calls.append(("photo", url, caption))
+            return SimpleNamespace(message_id=77)
+        async def delete(self):
+            self.calls.append(("delete",))
+
+    class FakeCb:
+        def __init__(self, photo):
+            self.message = FakeMsg(photo)
+            self.from_user = SimpleNamespace(id=55, first_name="Тест")
+        async def answer(self, *a, **kw):
+            pass
+
+    bot.db.upsert_user(55, "t")
+    h = asyncio.get_event_loop_policy().new_event_loop().run_until_complete
+
+    # 1) с баннера: подпись правится, баннер НЕ удаляется
+    cb = FakeCb([SimpleNamespace()])
+    h(bot.cb_menu(cb))
+    assert cb.message.calls[0][0] == "caption"
+    assert not any(c[0] == "delete" for c in cb.message.calls)
+    assert not any(c[0] == "answer" for c in cb.message.calls)
+
+    # 2) с текстового экрана: приходит баннер /start с меню
+    cb2 = FakeCb([])
+    h(bot.cb_menu(cb2))
+    kinds = [c[0] for c in cb2.message.calls]
+    assert "photo" in kinds and kinds[0] == "photo"
+    assert cb2.message.calls[0][1] == bot.BANNER_URL
+    assert "delete" in kinds
