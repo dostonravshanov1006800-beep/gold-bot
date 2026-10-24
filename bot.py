@@ -182,9 +182,35 @@ def pe(key):
     return e
 
 
-def btn(text, data, icon=None, *, url=None, switch_inline=None):
+# ---------- v12.21: цветные кнопки (Bot API 9.4, style) ----------
+# Синие — игры и активности, зелёные — «забрать/открыть/создать»,
+# красные — деньги и покупки, остальные — нейтральные (навигация).
+# Явный style= в btn() перекрывает авто-цвет.
+BTN_PRIMARY = {"games", "g", "cube", "stake", "jackpot", "lvl", "tasks",
+               "tchk", "ctop", "case", "bonus", "clan", "topspent"}
+BTN_DANGER = {"topup", "shop", "buy", "exch"}
+BTN_SUCCESS_FULL = {"bonus:claim", "case:open", "exch:go", "clan:new", "duel"}
+BTN_STYLE_OVERRIDES = {}      # точные data → style (при особых случаях)
+
+
+def _btn_style(data):
+    """Цвет кнопки по callback-data (v12.21). None = нейтральная."""
+    if data in BTN_STYLE_OVERRIDES:
+        return BTN_STYLE_OVERRIDES[data]
+    tok = (data or "").split(":")[0]
+    if data in BTN_SUCCESS_FULL or tok in BTN_SUCCESS_FULL:
+        return "success"
+    if tok in BTN_DANGER:
+        return "danger"
+    if tok in BTN_PRIMARY:
+        return "primary"
+    return None
+
+
+def btn(text, data, icon=None, *, url=None, switch_inline=None, style=None):
     """Кнопка. Премиум-иконка — только в премиум-режиме, иначе чистый текст.
-    url — ссылка; switch_inline — открыть выбор чата с подстановкой @бот <query>."""
+    url — ссылка; switch_inline — открыть выбор чата с подстановкой @бот <query>.
+    style — цвет (primary/success/danger), по умолчанию авто по данным."""
     if url:
         if icon and PREMIUM_UI:
             return InlineKeyboardButton(
@@ -193,10 +219,14 @@ def btn(text, data, icon=None, *, url=None, switch_inline=None):
         return InlineKeyboardButton(text=text, url=url)
     if switch_inline is not None:
         return InlineKeyboardButton(text=text, switch_inline_query=switch_inline)
+    st = style or _btn_style(data)
     if icon and PREMIUM_UI:
         return InlineKeyboardButton(
-            text=text, callback_data=data, icon_custom_emoji_id=ICONS[icon][1]
+            text=text, callback_data=data, icon_custom_emoji_id=ICONS[icon][1],
+            **({"style": st} if st else {})
         )
+    return InlineKeyboardButton(
+        text=text, callback_data=data, **({"style": st} if st else {}))
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
